@@ -22,6 +22,11 @@ function spm_auto_reorient(p,img_type,p_others,mode,smooth_factor)
 %               the target realignment to your liking. Special option: can also use the path to a nifti file
 %               (this allows for cross-modality coregistration, no smoothing is applied here then, in this case
 %               it is advised to use mode 'mi' only).
+% - p_others    : cell array of chararrays filenames of other images to be reoriented with the same transform as the input imgpath image.
+%               The cell array should be of the same length as imgpath (but the chararrays can be of arbitrary size), or can be set empty with [].
+%               imgpath_other should only include OTHER files than the one specified in imgpath, as SPM12 has a peculiar way to handle
+%               the reorientaton of 4D NIfTI files, since the orientation matrix seem to be stored only once in the headers, reorienting the first volume
+%               will also reorient all other volumes. Hence, if you don't have any other NIfTI file (and not volume) to reorient, simply set imgpath_other=[].
 % - mode    : coregister using the old 'affine' method, or the new 'mi' Mutual Information method or 'both' (first affine then mi) (default)
 % - smooth_factor : smoothing kernel (isotropic) for the affine coregistration. Default: 20. Usually, a big kernel helps in coregistering
 %             to template, particularly for brain damaged patients, but might also help with healthy volunteers.
@@ -29,7 +34,7 @@ function spm_auto_reorient(p,img_type,p_others,mode,smooth_factor)
 %
 % Returns: nothing, but the input image's headers are modified.
 %__________________________________________________________________________
-% v1.2
+% v1.3
 % Licensed under GPL (General Public License) v2
 % Code originally written by John Ashburner & Carlton Chu, FIL, UCL, London, UK
 % Extended by Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
@@ -40,6 +45,8 @@ if ~exist('p', 'var')
 end
 p = char(p);
 imgcount = size(p,1);
+    error('Wrong number of template images, does not match the number of source images to reorient!');
+end
 
 if ~exist('img_type', 'var')
     img_type = 't1group';
@@ -93,10 +100,14 @@ if strcmp(mode,'affine') | strcmp(mode,'both')
     flags.sep = 5;  % sampling distance. Reducing this enhances a bit the reorientation but significantly increases processing time.
     flags.regtype = 'mni';  % can be 'none', 'rigid', 'subj' or 'mni'. On brain damaged patients, 'mni' seems to give the best results (non-affine transform), but we don't use the scaling factor anyway. See also a comparison in: Liu, Yuan, and Benoit M. Dawant. "Automatic detection of the anterior and posterior commissures on MRI scans using regression forests." 2014 36th Annual International Conference of the IEEE Engineering in Medicine and Biology Society. IEEE, 2014.
 
-    % Load template image
-    Vtemplate = spm_vol(img_template);
 % For each input image
 for i = 1:imgcount
+        % Load template image
+        if strcmp(img_template, 'file')
+            Vtemplate = spm_vol(img_type(i,:));
+        else
+            Vtemplate = spm_vol(img_template);
+        end %endif
         % Load source image to reorient to template, create a temporary file (to avoid permission issues) and smooth to ease coregistration to template
         source = strtrim(p(i,:));
         spm_smooth(source,'temp.nii',[smooth_factor smooth_factor smooth_factor]);
@@ -122,11 +133,15 @@ M_mi_mem = {};
 if strcmp(mode,'mi') | strcmp(mode,'both')
     fprintf('Mutual information reorientation, please wait...\n');
     % Configure coregistration
-    flags2.cost_fun = 'ncc';
-    % Load template image
-    Vtemplate = spm_vol(tmpl);
+    flags2.cost_fun = 'ecc';  % ncc works remarkably well, when it works, else it fails very badly...
     % For each input image
     for i = 1:imgcount
+        % Load template image
+        if strcmp(img_template, 'file')
+            Vtemplate = spm_vol(img_type(i,:));
+        else
+            Vtemplate = spm_vol(img_template);
+        end %endif
         % Load source image to reorient to template
         % NB: no need for smoothing here since the joint histogram is smoothed
         source = strtrim(p(i,:));
@@ -144,30 +159,39 @@ if strcmp(mode,'mi') | strcmp(mode,'both')
 end %endif
 
 % Apply the reorientation transform onto other images (if specified), without recalculating, so that we keep motion information if any
-for i = 1:imgcount
-    % Load the appropriate transforms
-    if strcmp(mode,'affine') | strcmp(mode,'both'), M = M_aff_mem{i}; end
-    if strcmp(mode,'mi') | strcmp(mode,'both'), M_mi = M_mi_mem{i}; end
-    % For each other image
-    for j = 1:size(p_others{i},1);
-        % Get file path
-        source_other = p_others{i}{j};
-        if ~isempty(strtrim(source_other)) && ~strcmp(source,source_other)  % If filepath is empty or same as source functional, just skip
-            % Load volume
-            N = nifti(source_other);
-            if strcmp(mode,'affine') | strcmp(mode,'both')
-                % Apply affine transform
-                N.mat = M*N.mat;
+if ~isempty(p_others)
+    for i = 1:imgcount
+        fprintf('Applying transform to other images...\n');
+        % Load the appropriate transforms
+        if strcmp(mode,'affine') | strcmp(mode,'both'), M = M_aff_mem{i}; end
+        if strcmp(mode,'mi') | strcmp(mode,'both'), M_mi = M_mi_mem{i}; end
+        % For each other image
+        for j = 1:size(p_others{i},1);
+            % Get file path
+            if iscell(p_others{i})
+                source_other = strtrim(p_others{i}{j});
+            elseif ischar(p_other{i})
+                source_other = strtrim(p_others{i}(j,:));
+            else
+                error('Malformatted p_others, please check the structure used');
             end %endif
-            if strcmp(mode,'mi') | strcmp(mode,'both')
-                % Apply Mutual Information rigid-body transform
-                N.mat = spm_matrix(M_mi)\N.mat;
+            if ~isempty(source_other) && ~strcmp(source,source_other)  % If filepath is empty or same as source functional, just skip
+                % Load volume
+                N = nifti(source_other);
+                if strcmp(mode,'affine') | strcmp(mode,'both')
+                    % Apply affine transform
+                    N.mat = M*N.mat;
+                end %endif
+                if strcmp(mode,'mi') | strcmp(mode,'both')
+                    % Apply Mutual Information rigid-body transform
+                    N.mat = spm_matrix(M_mi)\N.mat;
+                end %endif
+                % Save the transform into nifti file headers
+                create(N);
             end %endif
-            % Save the transform into nifti file headers
-            create(N);
-        end %endif
+        end %endfor
     end %endfor
-end %endfor
+end %endif
 
 fprintf('Automatic reorientation done.\n');
 
