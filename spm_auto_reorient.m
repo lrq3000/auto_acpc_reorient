@@ -34,7 +34,7 @@ function spm_auto_reorient(p,img_type,p_others,mode,smooth_factor)
 %
 % Returns: nothing, but the input image's headers are modified.
 %__________________________________________________________________________
-% v1.3
+% v1.3.1
 % Licensed under GPL (General Public License) v2
 % Code originally written by John Ashburner & Carlton Chu, FIL, UCL, London, UK
 % Extended by Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
@@ -133,7 +133,8 @@ M_mi_mem = {};
 if strcmp(mode,'mi') | strcmp(mode,'both')
     fprintf('Mutual information reorientation, please wait...\n');
     % Configure coregistration
-    flags2.cost_fun = 'ecc';  % ncc works remarkably well, when it works, else it fails very badly...
+    flags2.cost_fun = 'ecc';  % ncc works remarkably well, when it works, else it fails very badly... Also ncc should only be used for within-modality coregistration (TODO: test if for reorientation it works well, even on very damaged/artefacted brains?)
+    flags2.tol = [0.02, 0.02, 0.02, 0.001, 0.001, 0.001, 0.01, 0.01, 0.01, 0.001, 0.001, 0.001];  % VERY important to get good results, these are defaults from the GUI
     % For each input image
     for i = 1:imgcount
         % Load template image
@@ -160,8 +161,8 @@ end %endif
 
 % Apply the reorientation transform onto other images (if specified), without recalculating, so that we keep motion information if any
 if ~isempty(p_others)
+    fprintf('Applying transform to other images...\n');
     for i = 1:imgcount
-        fprintf('Applying transform to other images...\n');
         % Load the appropriate transforms
         if strcmp(mode,'affine') | strcmp(mode,'both'), M = M_aff_mem{i}; end
         if strcmp(mode,'mi') | strcmp(mode,'both'), M_mi = M_mi_mem{i}; end
