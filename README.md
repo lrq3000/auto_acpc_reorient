@@ -1,4 +1,6 @@
-# spm_auto_reorient
+# spm_auto_reorient : Cross-platform automatic AC-PC realignment/reorientation and coregistration robust to brain damage in SPM
+
+Cross-platform automatic AC-PC realignment/reorientation and coregistration for both healthy volunteers and brain damaged patients using template matching in SPM 12.
 
 This is a set of routines to perform "auto reorient" and "auto coregistration" in the toolbox [Statistical Parametric Mapping 12 (SPM12)](https://www.fil.ion.ucl.ac.uk/spm/).
 

@@ -11,7 +11,7 @@ function spm_auto_reorient(p,img_type,p_others,mode,smooth_factor,flags_affine,f
 % which is for most methods, such as in "unified segmentation", sensitive
 % to initial conditions (the starting orientation of the image).
 %
-% If mode 'mi' is selected, the origin will also be changed to match AC-PC plane.
+% If mode 'mi' is selected, the origin will also be changed to match AC.
 %
 % It is advised to check (and fix if necessary) manually the result.
 %
