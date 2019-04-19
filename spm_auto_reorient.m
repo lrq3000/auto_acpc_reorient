@@ -1,15 +1,17 @@
-function spm_auto_reorient(p,img_type,p_others,mode,smooth_factor)
+function spm_auto_reorient(p,img_type,p_others,mode,smooth_factor,flags_affine,flags_mi)
 
 % FORMAT spm_auto_reorient(p,img_type,p_others,mode,smooth_factor)
 % Automatically reorient a T1 image (or any other usual image modality) in the MNI space
 % This uses a non-linear coregistration on a template,
 % although the reorientation only applies a rigid-body transform.
+% This supports both euclidian (spm_affreg) and joint histogram
+% (spm_coreg) methods.
 %
 % This is useful as group analysis rely on between-subjects coregistration
 % which is for most methods, such as in "unified segmentation", sensitive
 % to initial conditions (the starting orientation of the image).
 %
-% If mode 'mi' is selected, the origin will also be changed to match AC.
+% If mode 'mi' is selected, the origin will also be changed to match AC-PC plane.
 %
 % It is advised to check (and fix if necessary) manually the result.
 %
@@ -31,10 +33,12 @@ function spm_auto_reorient(p,img_type,p_others,mode,smooth_factor)
 % - smooth_factor : smoothing kernel (isotropic) for the affine coregistration. Default: 20. Usually, a big kernel helps in coregistering
 %             to template, particularly for brain damaged patients, but might also help with healthy volunteers.
 %             However, a too big kernel will also result in suboptimal coregistration. 20 is good for T1.
+% - flags_affine: provide your custom flags for the affine coregistration
+% - flags_mi    : provide your custom flags for the mutual information coregistration
 %
 % Returns: nothing, but the input image's headers are modified.
 %__________________________________________________________________________
-% v1.3.1
+% v1.3.2
 % Licensed under GPL (General Public License) v2
 % Code originally written by John Ashburner & Carlton Chu, FIL, UCL, London, UK
 % Extended by Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
@@ -62,6 +66,14 @@ end
 
 if ~exist('smooth_factor', 'var')
     smooth_factor = 20;
+end
+
+if ~exist('flags_affine', 'var')
+    flags_affine = [];
+end
+
+if ~exist('flags_mi', 'var')
+    flags_mi = [];
 end
 
 %% Select template to reorient to
@@ -97,11 +109,15 @@ M_aff_mem = {};
 if strcmp(mode,'affine') | strcmp(mode,'both')
     fprintf('Affine reorientation, please wait...\n');
     % Configure coregistration to template (will be the basis of the reorientation)
-    flags.sep = 5;  % sampling distance. Reducing this enhances a bit the reorientation but significantly increases processing time.
-    flags.regtype = 'mni';  % can be 'none', 'rigid', 'subj' or 'mni'. On brain damaged patients, 'mni' seems to give the best results (non-affine transform), but we don't use the scaling factor anyway. See also a comparison in: Liu, Yuan, and Benoit M. Dawant. "Automatic detection of the anterior and posterior commissures on MRI scans using regression forests." 2014 36th Annual International Conference of the IEEE Engineering in Medicine and Biology Society. IEEE, 2014.
+    if ~isempty(flags_affine)
+        flags = flags_affine
+    else
+        flags.sep = 5;  % sampling distance. Reducing this enhances a bit the reorientation but significantly increases processing time.
+        flags.regtype = 'mni';  % can be 'none', 'rigid', 'subj' or 'mni'. On brain damaged patients, 'mni' seems to give the best results (non-affine transform), but we don't use the scaling factor anyway. See also a comparison in: Liu, Yuan, and Benoit M. Dawant. "Automatic detection of the anterior and posterior commissures on MRI scans using regression forests." 2014 36th Annual International Conference of the IEEE Engineering in Medicine and Biology Society. IEEE, 2014.
+    end %endif
 
-% For each input image
-for i = 1:imgcount
+    % For each input image
+    for i = 1:imgcount
         % Load template image
         if strcmp(img_template, 'file')
             Vtemplate = spm_vol(img_type(i,:));
@@ -133,8 +149,12 @@ M_mi_mem = {};
 if strcmp(mode,'mi') | strcmp(mode,'both')
     fprintf('Mutual information reorientation, please wait...\n');
     % Configure coregistration
-    flags2.cost_fun = 'ecc';  % ncc works remarkably well, when it works, else it fails very badly... Also ncc should only be used for within-modality coregistration (TODO: test if for reorientation it works well, even on very damaged/artefacted brains?)
-    flags2.tol = [0.02, 0.02, 0.02, 0.001, 0.001, 0.001, 0.01, 0.01, 0.01, 0.001, 0.001, 0.001];  % VERY important to get good results, these are defaults from the GUI
+    if ~isempty(flags_mi)
+        flags2 = flags_mi
+    else
+        flags2.cost_fun = 'ecc';  % ncc works remarkably well, when it works, else it fails very badly... Also ncc should only be used for within-modality coregistration (TODO: test if for reorientation it works well, even on very damaged/artefacted brains?)
+        flags2.tol = [0.02, 0.02, 0.02, 0.001, 0.001, 0.001, 0.01, 0.01, 0.01, 0.001, 0.001, 0.001];  % VERY important to get good results, these are defaults from the GUI
+    end
     % For each input image
     for i = 1:imgcount
         % Load template image
