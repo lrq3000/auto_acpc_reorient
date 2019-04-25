@@ -38,7 +38,7 @@ function spm_auto_reorient(p,img_type,p_others,mode,smooth_factor,flags_affine,f
 %
 % Returns: nothing, but the input image's headers are modified.
 %__________________________________________________________________________
-% v1.3.2
+% v1.3.3
 % Licensed under GPL (General Public License) v2
 % Code originally written by John Ashburner & Carlton Chu, FIL, UCL, London, UK
 % Extended by Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
@@ -124,10 +124,16 @@ if strcmp(mode,'affine') | strcmp(mode,'both')
         else
             Vtemplate = spm_vol(img_template);
         end %endif
-        % Load source image to reorient to template, create a temporary file (to avoid permission issues) and smooth to ease coregistration to template
+        % Load source image to reorient to template
         source = strtrim(p(i,:));
-        spm_smooth(source,'temp.nii',[smooth_factor smooth_factor smooth_factor]);
-        Vsource = spm_vol('temp.nii');
+        Vsource = spm_vol(source);
+        % smooth to ease coregistration to template
+        Vsourcesmoothed = zeros(Vsource.dim(1:3));  % prevent spm_smooth() from saving the smoothing back to the file, by creating a temporary variable where to store the smoothed image
+        spm_smooth(Vsource,Vsourcesmoothed,[smooth_factor smooth_factor smooth_factor]);  % TODO: should update to spm_smoothkern()? Check spm_realign()
+        % put the smoothed data back to the original struct, from https://www.jiscmail.ac.uk/cgi-bin/webadmin?A2=ind1808&L=spm&P=R27983&1=spm&9=A&I=-3&J=on&d=No+Match%3BMatch%3BMatches&z=4 and https://github.com/spm/spm12/blob/r7219/spm_spm.m#L522
+        Vsource.dat = Vsourcesmoothed;
+        Vsource.dt = [spm_type('float64') spm_platform('bigend')];  % necessary to make the data readable in-memory
+        Vsource.pinfo = [1 0 0]';  % necessary to make the data readable in-memory
         % Calculate the reorientation matrix from source image to match template image
         [M, scal] = spm_affreg(Vtemplate,Vsource,flags);
         M3 = M(1:3,1:3);
