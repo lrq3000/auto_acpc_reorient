@@ -38,7 +38,7 @@ function spm_auto_reorient(p,img_type,p_others,mode,smooth_factor,flags_affine,f
 %
 % Returns: nothing, but the input image's headers are modified.
 %__________________________________________________________________________
-% v1.3.5
+% v1.3.6
 % Licensed under GPL (General Public License) v2
 % Code originally written by John Ashburner & Carlton Chu, FIL, UCL, London, UK
 % Extended by Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
