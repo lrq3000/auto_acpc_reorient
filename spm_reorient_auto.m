@@ -1,9 +1,9 @@
-function spm_auto_reorient(imgpath, img_type, imgpath_other, mode, smooth_factor, flags_affine, flags_mi)
+function spm_reorient_auto(imgpath, img_type, imgpath_other, mode, smooth_factor, flags_affine, flags_mi)
 
 % Cross-platform automatic AC-PC realignment/reorientation and coregistration
 % for both healthy volunteers and brain damaged patients using template matching
 % in SPM 12.
-% FORMAT spm_auto_reorient(imgpath, img_type, imgpath_other, mode, smooth_factor, flags_affine, flags_mi)
+% FORMAT spm_reorient_auto(imgpath, img_type, imgpath_other, mode, smooth_factor, flags_affine, flags_mi)
 %
 % imgpath       - filepath or chararray of filepaths of NIfTI images to reorient (as `ls` returns).
 %               For 4D nifti files, please select only the first volume (eg, p='bold.nii,1'), and not the others (they will also be reoriented).
@@ -42,11 +42,25 @@ function spm_auto_reorient(imgpath, img_type, imgpath_other, mode, smooth_factor
 %
 % It is advised to check (and fix if necessary) manually the result.
 %__________________________________________________________________________
-% v1.4.0
+% v1.4.1
 % License: GPL (General Public License) v2 (same as SPM12)
 % Copyright (C) 2008 John Ashburner, FIL, UCL, London, UK (source: https://www.jiscmail.ac.uk/cgi-bin/webadmin?A2=SPM;d1f675f1.0810 )
 % Copyright (C) 2008 Carlton Chu, FIL, UCL, London, UK (source: https://www.jiscmail.ac.uk/cgi-bin/webadmin?A2=SPM;d1f675f1.0810 )
 % Copyright (C) 2019-2020 Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
+%
+%    This program is free software; you can redistribute it and/or modify
+%    it under the terms of the GNU General Public License as published by
+%    the Free Software Foundation; either version 2 of the License, or
+%    (at your option) any later version.
+%
+%    This program is distributed in the hope that it will be useful,
+%    but WITHOUT ANY WARRANTY; without even the implied warranty of
+%    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+%    GNU General Public License for more details.
+%
+%    You should have received a copy of the GNU General Public License along
+%    with this program; if not, write to the Free Software Foundation, Inc.,
+%    51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 % Init input variables
 if ~exist('imgpath', 'var')
