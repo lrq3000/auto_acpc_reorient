@@ -1,25 +1,22 @@
-function spm_auto_coreg(struct,func,others,mode,modality)
+function spm_auto_coreg(struct, func, others, mode, modality)
 
-% FORMAT spm_auto_coreg(struct,func,others,mode,modality)
+% Coregister functional (or other modalities) to structural images using rigid-body transform
+% via either an euclidian coregistration or a Mutual Information calculation on Joint Histograms.
+% FORMAT spm_auto_coreg(struct, func, others, mode, modality)
 %
-% Function to coregister functional (or other modalities) to structural images
-% using rigid-body transform via either an euclidian coregistration or a Mutual Information calculation on Joint Histograms.
-% Works on SPM12.
+% struct    - filename of the reference structural image
+% func      - filename of the source functional image (that will be coregistered to structural image). In general, this should be the first BOLD volume (to register to the first volume). For 4D NIfTI, select the first volume such as 'bold.nii,1', and do NOT select other volumes in others, as SPM will anyway coregister all volumes.
+% others    - list of filenames of other functional (or other modality) images to coregister with the same transform as the source image (format similar to what `ls` returns). For 4D NIfTI, if you selected the first volume in func, do NOT specify the rest of the volumes here.
+% mode      - coregister using the old 'affine' method, or the new 'mi' Mutual Information method (default) or 'both' (first affine then mi)
+% modality  - modality of the 'func' image, can be any type supported by SPM: 't1', 't2', 'epi', 'pd', 'pet', 'spect'. Default: 'epi'.
+%
+% Output: the voxel-to-world part of the headers of the selected source (func) and others images is modified.
 %
 % It is advised to check (and fix if necessary) manually the result (using CheckReg).
-%
-% IN:
-% - struct      : filename of the reference structural image
-% - func        : filename of the source functional image (that will be coregistered to structural image). In general, this should be the first BOLD volume (to register to the first volume). For 4D NIfTI, select the first volume such as 'bold.nii,1', and do NOT select other volumes in others, as SPM will anyway coregister all volumes.
-% - others      : list of filenames of other functional (or other modality) images to coregister with the same transform as the source image (format similar to what `ls` returns). For 4D NIfTI, if you selected the first volume in func, do NOT specify the rest of the volumes here.
-% - mode        : coregister using the old 'affine' method, or the new 'mi' Mutual Information method (default) or 'both' (first affine then mi)
-% - modality    : modality of the 'func' image, can be any type supported by SPM: 't1', 't2', 'epi', 'pd', 'pet', 'spect'. Default: 'epi'.
-%
-% OUT:
-% - the voxel-to-world part of the headers of the selected source (func) and others images is modified.
+% Works with SPM12.
 %__________________________________________________________________________
-% v1.0.7
-% License: GPL (General Public License) v2
+% v1.0.8
+% License: GPL (General Public License) v2 (same as SPM12)
 % Copyright (C) 2019-2020 Stephen Karl Larroque - Coma Science Group - GIGA-Consciousness - University & Hospital of Liege
 
 %% Check inputs
