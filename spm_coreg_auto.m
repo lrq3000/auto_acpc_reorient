@@ -69,7 +69,7 @@ end
 
 % PRE-COREGISTRATION ON TEMPLATE
 % First, coregister on template brain
-% This greatly enhance the results, particularly if the structural was auto-reoriented on MNI (using github.com/lrq3000/spm_auto_reorient_coregister) so that the template EPI is in the same space as the structural, hence why this enhances the results
+% This greatly enhance the results, particularly if the structural was auto-reoriented on MNI (using spm_reorient_auto beforehand) so that the template EPI is in the same space as the structural, hence why this enhances the results
 % If this is not done, most often the coregistration will get the rotation right but not the translation
 fprintf('Pre-coregistration on %s template, please wait...\n', modality);
 spm_reorient_auto(func, modality, others, mode);

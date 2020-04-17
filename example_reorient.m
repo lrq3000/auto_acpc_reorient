@@ -1,5 +1,5 @@
 function example_reorient(rootpath)
-% example_auto_reorient(rootpath)
+% example_reorient(rootpath)
 % Simple example script that reorients all files found in a folder
 %
 %    This program is free software; you can redistribute it and/or modify
