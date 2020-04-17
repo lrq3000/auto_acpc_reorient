@@ -67,7 +67,7 @@ For a comparison of various methods for AC-PC reorientation, the following artic
 
 Please cite this work as following (a paper is in preparation but not available yet):
 
-> spm_reorient_auto. [https://github.com/lrq3000/spm_reorient_auto](https://github.com/lrq3000/spm_reorient_auto)
+> spm_reorient_auto, RRID:SCR_018308. [https://github.com/lrq3000/spm_reorient_auto](https://github.com/lrq3000/spm_reorient_auto)
 
 ## Authors
 
