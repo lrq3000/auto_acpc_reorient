@@ -87,4 +87,4 @@ General Public License (GPL) v2.
 
 ## Contact
 
-For questions or suggestions, contact Stephen Karl Larroque at: stephen dot larroque at uliege dot be.
+If you have any feedback (questions, issues, suggestions), please contact Stephen Karl Larroque at: stephen dot larroque at uliege dot be.
