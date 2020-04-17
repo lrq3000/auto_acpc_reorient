@@ -15,8 +15,8 @@ function spm_reorient_auto(imgpath, img_type, imgpath_other, mode, smooth_factor
 %               the target realignment to your liking. Special option: can also use the path to a nifti file
 %               (this allows for cross-modality coregistration, no smoothing is applied here then, in this case
 %               it is advised to use mode 'mi' only).
-% imgpath_other - cell array of chararrays filenames of other images to be reoriented as the corresponding input imgpath image.
-%               The cell array should be of same length as imgpath (but the chararrays can be of arbitrary size), or left empty (default).
+% imgpath_other - cell array of chararrays filenames of other images to be reoriented with the same transform as the input imgpath image.
+%               The cell array should be of the same length as imgpath (but the chararrays can be of arbitrary size), or can be set empty with [].
 %               imgpath_other should only include OTHER files than the one specified in imgpath, as SPM12 has a peculiar way to handle
 %               the reorientaton of 4D NIfTI files, since the orientation matrix seem to be stored only once in the headers, reorienting the first volume
 %               will also reorient all other volumes. Hence, if you don't have any other NIfTI file (and not volume) to reorient, simply set imgpath_other=[].
