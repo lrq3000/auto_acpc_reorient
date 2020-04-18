@@ -86,7 +86,13 @@ Another earlier fork of auto_reorient.m named [spm_auto_reorient](https://github
 
 ## License
 
-General Public License (GPL) v2.
+The code is licensed under GPL (General Public License) v3 or later, except otherwise noted in comments around the code the other license pertains to (in particular the core of the affine reorientation code, which is licensed [under CC-BY-SA v3.0](https://en.m.wikibooks.org/wiki/Special:MobileDiff/2764852) (notice the licensing at the bottom of the page) and authored by [John Ashburner and Carlton Chu](https://www.jiscmail.ac.uk/cgi-bin/webadmin?A2=SPM;d1f675f1.0810)).
+
+Adaptations can [upgrade to later CC-BY-SA licenses as is permitted by the Creative Commons Foundation](https://wiki.creativecommons.org/wiki/4.0_upgrade_guidelines), as long as the [original contributions are maintained under the original license](https://opensource.stackexchange.com/questions/7430/can-i-upgrade-the-version-of-cc-by-sa-from-3-0-to-4-0-in-my-modification#comment21314_7431).
+
+This adaptation hence was upgraded to [CC-BY-SA 4.0, which is one-way compatible to GPL v3](https://www.fsf.org/blogs/licensing/creative-commons-by-sa-4-0-declared-one-way-compatible-with-gnu-gpl-version-3). This upgrade of licensing is preferable as the Creative Commons Foundation stated that [CC-BY-SA licenses are unfit to license software sourcecodes](https://opensource.stackexchange.com/questions/1717/why-is-cc-by-sa-discouraged-for-code).
+
+The templates are licensed under either GPL (General Public License) v3 or later, or CC0 (Public Domain) at your convenience.
 
 ## Contact
 

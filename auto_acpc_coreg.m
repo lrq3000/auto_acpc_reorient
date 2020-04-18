@@ -15,13 +15,13 @@ function auto_acpc_coreg(struct, func, others, mode, modality)
 % It is advised to check (and fix if necessary) manually the result (using CheckReg).
 % Works with SPM12.
 %__________________________________________________________________________
-% v1.1.1
-% License: GPL (General Public License) v2 (same as SPM12)
+% v1.1.2
+% License: GPL (General Public License) v3 or later
 % Copyright (C) 2019-2020 Stephen Karl Larroque - Coma Science Group - GIGA-Consciousness - University & Hospital of Liege
 %
 %    This program is free software; you can redistribute it and/or modify
 %    it under the terms of the GNU General Public License as published by
-%    the Free Software Foundation; either version 2 of the License, or
+%    the Free Software Foundation; either version 3 of the License, or
 %    (at your option) any later version.
 %
 %    This program is distributed in the hope that it will be useful,

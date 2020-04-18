@@ -41,15 +41,15 @@ function auto_acpc_reorient(imgpath, img_type, imgpath_other, mode, smooth_facto
 %
 % It is advised to check (and fix if necessary) manually the result.
 %__________________________________________________________________________
-% v1.4.5
-% License: GPL (General Public License) v2 (same as SPM12)
+% v1.4.6
+% License: GPL (General Public License) v3 or later, except otherwise noted in comments around the code the other license pertains to
 % Copyright (C) 2008 John Ashburner, FIL, UCL, London, UK (source: https://www.jiscmail.ac.uk/cgi-bin/webadmin?A2=SPM;d1f675f1.0810 )
 % Copyright (C) 2008 Carlton Chu, FIL, UCL, London, UK (source: https://www.jiscmail.ac.uk/cgi-bin/webadmin?A2=SPM;d1f675f1.0810 )
 % Copyright (C) 2019-2020 Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
 %
 %    This program is free software; you can redistribute it and/or modify
 %    it under the terms of the GNU General Public License as published by
-%    the Free Software Foundation; either version 2 of the License, or
+%    the Free Software Foundation; either version 3 of the License, or
 %    (at your option) any later version.
 %
 %    This program is distributed in the hope that it will be useful,
@@ -165,18 +165,22 @@ if strcmp(mode,'affine') | strcmp(mode,'both')
         Vsource.dt = [spm_type('float64') spm_platform('bigend')];  % necessary to make the data readable in-memory
         Vsource.pinfo = [1 0 0]';  % necessary to make the data readable in-memory
         % Calculate the reorientation matrix from source image to match template image
+        %%% Content licensed under CC-BY-SA 3.0 by John Ashburner and Carlton Chu : https://en.m.wikibooks.org/wiki/Special:MobileDiff/2764852
         [M, scal] = spm_affreg(Vtemplate, Vsource, flags);
         M3 = M(1:3,1:3);
         [u s v] = svd(M3);
         M3 = u*v';
         M(1:3,1:3) = M3;
+        %%% End of CC-BY-SA 3.0 licensed content
         % Memorize to apply on other images later
         M_aff_mem{i} = M;
         % Reload source image to apply the transform on it
+        %%% Content licensed under CC-BY-SA 3.0 by John Ashburner and Carlton Chu : https://en.m.wikibooks.org/wiki/Special:MobileDiff/2764852
         N = nifti(source);
         N.mat = M*N.mat;
         % Save the transform into nifti file headers
         create(N);
+        %%% End of CC-BY-SA 3.0 licensed content
     end %endfor
 end %endif
 
