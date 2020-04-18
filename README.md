@@ -70,7 +70,7 @@ For a comparison of various methods for AC-PC reorientation, the following artic
 
 Please cite this work as following (a paper is in preparation but not available yet):
 
-> auto_acpc_reorient. [https://github.com/lrq3000/auto_acpc_reorient](https://github.com/lrq3000/auto_acpc_reorient)
+> auto_acpc_reorient, RRID:SCR_018308. [https://github.com/lrq3000/auto_acpc_reorient](https://github.com/lrq3000/auto_acpc_reorient)
 
 ## Authors
 
