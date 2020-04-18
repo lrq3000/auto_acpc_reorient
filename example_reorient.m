@@ -18,5 +18,5 @@ function example_reorient(rootpath)
     cd(rootpath)
     fileslist = ls(rootpath)
     fileslist = fileslist(3:end, :)  % remove '.' and '..' from the list
-    spm_reorient_auto(fileslist)
+    auto_acpc_reorient(fileslist)
 end %endfunction

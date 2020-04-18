@@ -1,8 +1,8 @@
-function spm_coreg_auto(struct, func, others, mode, modality)
+function auto_acpc_coreg(struct, func, others, mode, modality)
 
 % Coregister functional (or other modalities) to structural images using rigid-body transform
 % via either an euclidian coregistration or a Mutual Information calculation on Joint Histograms.
-% FORMAT spm_coreg_auto(struct, func, others, mode, modality)
+% FORMAT auto_acpc_coreg(struct, func, others, mode, modality)
 %
 % struct    - filename of the reference structural image
 % func      - filename of the source functional image (that will be coregistered to structural image). In general, this should be the first BOLD volume (to register to the first volume). For 4D NIfTI, select the first volume such as 'bold.nii,1', and do NOT select other volumes in others, as SPM will anyway coregister all volumes.
@@ -69,10 +69,10 @@ end
 
 % PRE-COREGISTRATION ON TEMPLATE
 % First, coregister on template brain
-% This greatly enhance the results, particularly if the structural was auto-reoriented on MNI (using spm_reorient_auto beforehand) so that the template EPI is in the same space as the structural, hence why this enhances the results
+% This greatly enhance the results, particularly if the structural was auto-reoriented on MNI (using auto_acpc_reorient beforehand) so that the template EPI is in the same space as the structural, hence why this enhances the results
 % If this is not done, most often the coregistration will get the rotation right but not the translation
 fprintf('Pre-coregistration on %s template, please wait...\n', modality);
-spm_reorient_auto(func, modality, others, mode);
+auto_acpc_reorient(func, modality, others, mode);
 if strcmp(mode, 'precoreg')
     % Useful for debugging, we can only do the precoregistration and then leave
     return
@@ -88,7 +88,7 @@ flags_mi.tol = [0.1, 0.1, 0.02, 0.02, 0.02, 0.001, 0.001, 0.001, 0.01, 0.01, 0.0
 flags_mi.fwhm = [1, 1];  % reduce smoothing for more efficient coregistering, since the pre-coregistration normally should have placed the brain quite in the correct spot overall. This greatly enhances results, particularly on brain damaged subjects.
 flags_mi.sep = [4 2 1];  % use [4 2 1] if you want to use a finer grained step at the end at 1mm, this can help to get more precise coregistration in some cases but at the cost of a quite longer computing time, this greatly help for a few hard cases
 % coregister to structural
-spm_reorient_auto(func, structpath, others, mode, [], [], flags_mi);
+auto_acpc_reorient(func, structpath, others, mode, [], [], flags_mi);
 
 fprintf('Automatic coregistration done.\n');
 

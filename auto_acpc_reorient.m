@@ -1,19 +1,18 @@
-function spm_reorient_auto(imgpath, img_type, imgpath_other, mode, smooth_factor, flags_affine, flags_mi)
+function auto_acpc_reorient(imgpath, img_type, imgpath_other, mode, smooth_factor, flags_affine, flags_mi)
 
 % Cross-platform automatic AC-PC realignment/reorientation and coregistration
 % for both healthy volunteers and brain damaged patients using template matching
-% in SPM 12.
-% FORMAT spm_reorient_auto(imgpath, img_type, imgpath_other, mode, smooth_factor, flags_affine, flags_mi)
+% using SPM 12.
+% FORMAT auto_acpc_reorient(imgpath, img_type, imgpath_other, mode, smooth_factor, flags_affine, flags_mi)
 %
 % imgpath       - filepath or chararray of filepaths of NIfTI images to reorient (as `ls` returns).
 %               For 4D nifti files, please select only the first volume (eg, p='bold.nii,1'), and not the others (they will also be reoriented).
-% img_type      - template image type 'T1group' (default), 'T1canonical', 'T1', 'T2', 'PET', 'EPI',...
-%               i.e. any of the templates provided by SPM/canonical. 'T1group' is a custom template we provide,
+% img_type      - template image type 'T1group' (default), 'T1', 'T2', 'PET', 'EPI',...
+%               i.e. any of the templates provided by SPM/toolbox/OldNorm. 'T1group' is a custom template we provide,
 %               computed as the average T1 from normalized T1 images from 10 subjects with intensity normalization
-%               and without skull stripping using CAT12 (rm* file). 'T1canonical' is the T1 brain image of a single subject
-%               as provided by SPM. Note that you can adjust the respective template if you want to tweak
-%               the target realignment to your liking. Special option: can also use the path to a nifti file
-%               (this allows for cross-modality coregistration, no smoothing is applied here then, in this case
+%               and without skull stripping using CAT12 (rm* file). Note that you can adjust the respective templates
+%               if you want to tweak the target realignment to your liking. Special option: can also use the path to a
+%               nifti file (this allows for cross-modality coregistration, no smoothing is applied here then, in this case
 %               it is advised to use mode 'mi' only).
 % imgpath_other - cell array of chararrays filenames of other images to be reoriented with the same transform as the input imgpath image.
 %               The cell array should be of the same length as imgpath (but the chararrays can be of arbitrary size), or can be set empty with [].
@@ -107,13 +106,12 @@ end
 % Get SPM directory path
 spmDir = which('spm');
 spmDir = spmDir(1:end-5);
+oldNormDir = fullfile(spmDir, 'toolbox/OldNorm');
 
 %% Select template to reorient to
 img_type = lower(img_type);
 % Manage special cases (ie, template name is too long so we allow a shorthand)
-if strcmp(img_type, 't1canonical')
-    img_template = fullfile(spmDir, 'canonical', 'single_subj_T1.nii')
-elseif strcmp(img_type, 't1group')
+if strcmp(img_type, 't1group')
     img_template = fullfile(spmDir, 'canonical', 'T1_template_CAT12_rm_withskull.nii');  % you need to add this file into spm/canonical
     if ~exist(img_template, 'file') == 2  % if template cannot be found in spm folder, try to look locally, in same folder as current script
         % Build the path to current script (because pwd is unreliable)
@@ -129,7 +127,7 @@ elseif exist(img_type(1,:), 'file') == 2
     % Note that then we will use img_type as a cellarr of filepaths to the templates to use
     img_template = 'file';
 else
-    img_template = fullfile(spmDir, 'toolbox', 'OldNorm', [upper(img_type) '.nii']);
+    img_template = fullfile(oldNormDir, [upper(img_type) '.nii']);
     % if template cannot be found in spm folder, try to use the provided img_type as a filepath
     if exist(img_template, 'file') ~= 2
         error('Cannot find template %s, please make sure the nifti file can be found either in SPM/toolbox/OldNorm or you can provide a full filepath.', img_template)
