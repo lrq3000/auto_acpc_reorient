@@ -41,7 +41,7 @@ function auto_acpc_reorient(imgpath, img_type, imgpath_other, mode, smooth_facto
 %
 % It is advised to check (and fix if necessary) manually the result.
 %__________________________________________________________________________
-% v1.4.2
+% v1.4.3
 % License: GPL (General Public License) v2 (same as SPM12)
 % Copyright (C) 2008 John Ashburner, FIL, UCL, London, UK (source: https://www.jiscmail.ac.uk/cgi-bin/webadmin?A2=SPM;d1f675f1.0810 )
 % Copyright (C) 2008 Carlton Chu, FIL, UCL, London, UK (source: https://www.jiscmail.ac.uk/cgi-bin/webadmin?A2=SPM;d1f675f1.0810 )
