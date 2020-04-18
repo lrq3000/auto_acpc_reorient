@@ -41,7 +41,7 @@ function auto_acpc_reorient(imgpath, img_type, imgpath_other, mode, smooth_facto
 %
 % It is advised to check (and fix if necessary) manually the result.
 %__________________________________________________________________________
-% v1.4.3
+% v1.4.4
 % License: GPL (General Public License) v2 (same as SPM12)
 % Copyright (C) 2008 John Ashburner, FIL, UCL, London, UK (source: https://www.jiscmail.ac.uk/cgi-bin/webadmin?A2=SPM;d1f675f1.0810 )
 % Copyright (C) 2008 Carlton Chu, FIL, UCL, London, UK (source: https://www.jiscmail.ac.uk/cgi-bin/webadmin?A2=SPM;d1f675f1.0810 )
@@ -113,12 +113,12 @@ img_type = lower(img_type);
 % Manage special cases (ie, template name is too long so we allow a shorthand)
 if strcmp(img_type, 't1group')
     img_template = fullfile(spmDir, 'canonical', 'T1_template_CAT12_rm_withskull.nii');  % you need to add this file into spm/canonical
-    if ~exist(img_template, 'file') == 2  % if template cannot be found in spm folder, try to look locally, in same folder as current script
+    if exist(img_template, 'file') ~= 2  % if template cannot be found in spm folder, try to look locally, in same folder as current script
         % Build the path to current script (because pwd is unreliable)
         scriptpath = mfilename('fullpath');
         scriptdir = fileparts(scriptpath); % get the parent directory of the current script
         img_template = fullfile(scriptdir, 'T1_template_CAT12_rm_withskull.nii');  % this file needs to be in the same folder as this script
-        if ~exist(img_template, 'file') == 2
+        if exist(img_template, 'file') ~= 2
             error('Cannot find template t1group, please make sure the nifti file is at the appropriate place (see readme)')
         end %endif
     end %endif
