@@ -1,8 +1,8 @@
 function auto_acpc_reorient(imgpath, img_type, imgpath_other, mode, smooth_factor, flags_affine, flags_mi)
-
 % Cross-platform automatic AC-PC realignment/reorientation and coregistration
 % for both healthy volunteers and brain damaged patients using template matching
 % using SPM 12.
+%
 % FORMAT auto_acpc_reorient(imgpath, img_type, imgpath_other, mode, smooth_factor, flags_affine, flags_mi)
 %
 % imgpath       - filepath or chararray of filepaths of NIfTI images to reorient (as `ls` returns).
@@ -27,6 +27,7 @@ function auto_acpc_reorient(imgpath, img_type, imgpath_other, mode, smooth_facto
 % flags_mi      - provide your custom flags for the mutual information coregistration
 %
 % Returns: nothing, but the input image's headers are modified.
+% _________________________________________________________________________
 %
 % This uses a non-linear coregistration on a template,
 % although the reorientation only applies a rigid-body transform.
@@ -184,7 +185,7 @@ if strcmp(mode,'affine') | strcmp(mode,'both')
     end %endfor
 end %endif
 
-% MUTUAL INFORMATION COREGISTRATION
+% JOINT HISTOGRAM (MUTUAL INFORMATION) COREGISTRATION
 M_mi_mem = {};
 if strcmp(mode, 'mi') | strcmp(mode, 'both')
     fprintf('Mutual information reorientation, please wait...\n');

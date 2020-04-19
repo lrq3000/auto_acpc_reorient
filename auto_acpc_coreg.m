@@ -1,7 +1,7 @@
 function auto_acpc_coreg(struct, func, others, mode, modality)
-
 % Coregister functional (or other modalities) to structural images using rigid-body transform
 % via either an euclidian coregistration or a Mutual Information calculation on Joint Histograms.
+%
 % FORMAT auto_acpc_coreg(struct, func, others, mode, modality)
 %
 % struct    - filename of the reference structural image
@@ -11,6 +11,7 @@ function auto_acpc_coreg(struct, func, others, mode, modality)
 % modality  - modality of the 'func' image, can be any type supported by SPM: 't1', 't2', 'epi', 'pd', 'pet', 'spect'. Default: 'epi'.
 %
 % Output: the voxel-to-world part of the headers of the selected source (func) and others images is modified.
+% _________________________________________________________________________
 %
 % It is advised to check (and fix if necessary) manually the result (using CheckReg).
 % Works with SPM12.
