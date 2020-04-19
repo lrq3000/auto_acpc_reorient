@@ -64,7 +64,7 @@ The best results we got were by doing the following steps:
 
 The last 2 steps can be done by calling `auto_acpc_coreg()`, which has optimized default parameters for this task.
 
-For indication, on a dataset of ~400 subjects with some heavily brain damaged or artifacted, the coregistration success rate was more than 95%.
+For indication, on a dataset of ~400 subjects with some heavily brain damaged or artifacted, the coregistration success rate was more than 95%. We have plans to conduct a more formal analysis but (as usual with open source) there is no guarantee it will happen in the near future :-)
 
 For a comparison of various methods for AC-PC reorientation, the following article is a very good read:
 
