@@ -51,7 +51,7 @@ General guideline:
 
 Note that the scripts can't be used from SPM12 GUI nor the BATCH system.
 
-## Guarantee
+## Guarantees
 
 There is no guarantee that this will work 100% of the times, although it was observed to produce good results with our own data (young and old healthy subjects, AD/PD patients, most of brain damaged patients even with significant movement or metal artefacts).
 
@@ -62,9 +62,11 @@ The best results we got were by doing the following steps:
 3. Coregister the functional to SPM12 EPI template (this allows a correct translation matrix and a good basis for rotation)
 4. Coregister the functional onto the structural (this fine-tunes rotation to precisely match the subject's structural)
 
-The last 2 steps can be done by calling `auto_acpc_coreg()`, which has optimized default parameters for this task. For indication, on a dataset of 100 subjects with some heavily brain damaged or artifacted, the coregistration success rate was more than 95%.
+The last 2 steps can be done by calling `auto_acpc_coreg()`, which has optimized default parameters for this task.
 
-For a comparison of various methods for AC-PC reorientation, the following article is a good read:
+For indication, on a dataset of ~400 subjects with some heavily brain damaged or artifacted, the coregistration success rate was more than 95%.
+
+For a comparison of various methods for AC-PC reorientation, the following article is a very good read:
 
 `Liu, Yuan, and Benoit M. Dawant. "Automatic detection of the anterior and posterior commissures on MRI scans using regression forests." 2014 36th Annual International Conference of the IEEE Engineering in Medicine and Biology Society. IEEE, 2014.`
 
