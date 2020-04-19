@@ -10,7 +10,7 @@ This is a set of routines to perform automatic reorient and coregistration with 
 
 ## Description
 
-Setting up the AC-PC and reorienting images is a recurrent issue in between-subjects group analyses, since they rely on coregistration methods that, like the "unified segmentation" of SPM12, are for most sensitive to initial conditions (the starting orientation of the image). These scripts are built on top of the original auto reorientation routines by [John Ashburner & Carlton Chu](https://en.wikibooks.org/wiki/SPM/How-to#How_to_automatically_reorient_images?).
+Setting up the AC-PC and reorienting images is a recurrent issue in between-subjects group analyses, since they rely on coregistration methods that, like the "unified segmentation" of SPM12, are for most sensitive to initial conditions (the starting orientation of the image).
 
 The main function, `auto_acpc_reorient.m`, automatically (but approximately) calculates a reorientation transform onto a target template in MNI space, in two steps:
 
@@ -22,6 +22,8 @@ This whole reorientation scheme relies on the "template matching" principle (as 
 In any case, it is advised to check the automatically reoriented images afterwards, and [fix the orientation manually, using SPM -> Display](https://en.wikibooks.org/wiki/SPM/How-to#How_to_manually_change_the_orientation_of_an_image?) if necessary.
 
 Another function, `auto_acpc_coreg.m`, expands on the same ideas to allow coregistration between modalities (eg, functional BOLD on structural MPRAGE). It is advised that `auto_acpc_reorient()` to be first applied on the structural before applying `auto_acpc_coreg()` on the other modality (even if you do manually fix the reorientation, as this ensures that the T1 is somewhat in the MNI space, making it easier for `auto_acpc_coreg()` to find the correct translation matrix).
+
+These scripts are built on top of the original auto reorientation routines by [John Ashburner & Carlton Chu](https://en.wikibooks.org/wiki/SPM/How-to#How_to_automatically_reorient_images?).
 
 ## Install
 
