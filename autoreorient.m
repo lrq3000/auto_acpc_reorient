@@ -80,19 +80,39 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale)
             % Q is a rotation matrix if its determinant equals to 1
             assert(single(det(Q)) == 1.0);
             % K is a scaling matrix if all non-diagonal values are 0
-            assert(all(all((triu(K, 1)+tril(K,-1)) == 0)));
+            assert(all((triu(K, 1)+tril(K,-1)) == 0, [1 2]));
             % S is a shearing matrix if:
             assert(single(det(S)) == 1.0);  % its determinant equals to 1
             assert(all(diag(S) == 1));  % all its main diagonal values equal to 1
             assert(all(eig(S) == 1));  % all eigenvalues equal to 1
             assert((rank(S) == trace(S)) && (trace(S) == size(Mnotrans, 1)));  % its trace equals its rank equals the NxN size of the 3D affine transform matrix
+            % Final check of the decomposition, we should find the original 3D affine transform matrix (without the translation of course)
+            assert(all(single(Mnotrans) == single(Q*K*S), [1 2]));  % convert from doubles to float to clean up the rounding errors during the decomposition
+            
+            % Construct the final semi-rigid-body (= rigid-body + isotropic scale, or with anisotropic scale but no shearing) transform
+            % Remember that M = (Q*K*S), and with the appending of T in the 4th column
+            M2 = Q;
+            if isorescale
+                M2 = M2 * Kiso;
+            else
+                M2 = M2 * K;
+            end
+            if ~noshearing
+                M2 = M2 * S;
+            end
+            % Reconstruct a 4x4 affine transform matrix (so that we can put back the translation column vector)
+            M3 = zeros(size(M));
+            M3(1:3,1:3) = M2;
+            % Restore the translation
+            M3(:,4) = T;
+            M = M3;
         end
-        keyboard
-        % Apply the reorientation and save back the new coordinations in the original input file
+        % Apply the reorientation on the input image header and save back the new coordinations in the original input file
         spm_get_space(inputpath, M*input_vol.mat);
     else
         fprintf('Mutual information reorientation\n');
         flags = struct('sep', 5);
+        % spm_coreg can only find a rigid-body rotation, hence spm_affreg is necessary for translation and (isotropic) scaling first, and also there is no need to do a QR decomposition here
         x = spm_coreg(template_vol, smoothed_vol2, flags);
         M = inv(spm_matrix(x));
         % Apply the reorientation and save back the new coordinations
