@@ -50,7 +50,7 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale)
             % If noshearing or isorescale, we will decompose the 3D affine transform matrix M into a rotation matrix Q, a scaling matrix K, and a shearing matrix S.
 
             % Factor out the translation, by simply removing 4th column (4th column being the translation, so it's factored out, as hinted by https://math.stackexchange.com/questions/1120209/decomposition-of-4x4-or-larger-affine-transformation-matrix-to-individual-variab)
-            % Note that SPM applies 3D transform matriecs in column-major form (translations are on the right side of the transform matrix M - note that SPM uses the column-major form usually, whereas the MATLAB doc uses the row-major form, for more infos about the difference, see: https://www.youtube.com/watch?v=UvevHXITVG4)
+            % Note that SPM applies 3D transform matriecs in column-major form (translations are on the right side of the transform matrix M - note that SPM uses the column-major form usually, whereas the MATLAB doc uses the row-major form, for more infos about the difference, see: https://www.youtube.com/watch?v=UvevHXITVG4 )
             % About 3D affine transforms, see also: https://www.youtube.com/watch?v=RqZH-7hlI48
             Mnotrans = M(1:3,1:3);  % remove the translation vector (4th column) from the matrix, that's an easy way to factor out the translation vector (so we only have the other transforms to decompose)
             T = M(:, 4);  % the 3D translation vector is the last column of the M matrix because we use the column-major form
@@ -69,7 +69,8 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale)
             if isorescale
                 % Compute the isotropic scaling matrix K if required
                 Kiso = eye(size(Mnotrans));
-                Kiso(1:size(R,1)+1:end) = mean(diag(R));  % compute the average rescaling factor, so we rescale but isotropically (ie, the same rescaling factor in all directions)
+                Kiso(1:size(R,1)+1:end) = mean(abs(diag(R))) .* sign(diag(R));  % compute the average rescaling factor, so we rescale but isotropically (ie, the same rescaling factor in all directions). We first calculate the mean of absolute values, and then we restore the sign. The sign is important because the decomposition may place in the rescaling matrix K a mirroring rescale (ie, the rotation Q will rotate in the opposite direction as the one we want, but rescaling in the negative direction -1 will mirror the brain and put it back in place).
+                % TODO: big issue: mirroring will inverse the place of gray matter? Left side of brain will be on the right side? Then we certainly don't want that!
             end
             Kinv = eye(size(Mnotrans));
             Kinv(1:size(R,1)+1:end) = 1 ./ diag(R);  % the inv(K) == the reciprocals (inverse) of the diagonal values in R
@@ -88,12 +89,13 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale)
             assert((rank(S) == trace(S)) && (trace(S) == size(Mnotrans, 1)));  % its trace equals its rank equals the NxN size of the 3D affine transform matrix
             % Final check of the decomposition, we should find the original 3D affine transform matrix (without the translation of course)
             assert(all(single(Mnotrans) == single(Q*K*S), [1 2]));  % convert from doubles to float to clean up the rounding errors during the decomposition
-            
+
             % Construct the final semi-rigid-body (= rigid-body + isotropic scale, or with anisotropic scale but no shearing) transform
             % Remember that M = (Q*K*S), and with the appending of T in the 4th column
             M2 = Q;
             if isorescale
                 M2 = M2 * Kiso;
+                disp(Kiso);
             else
                 M2 = M2 * K;
             end
@@ -101,11 +103,14 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale)
                 M2 = M2 * S;
             end
             % Reconstruct a 4x4 affine transform matrix (so that we can put back the translation column vector)
-            M3 = zeros(size(M));
-            M3(1:3,1:3) = M2;
-            % Restore the translation
-            M3(:,4) = T;
+            M3 = eye(size(M));  % the basis needs to be an identity matrix, see: https://www.youtube.com/watch?v=UvevHXITVG4
+            M3(1:3,1:3) = M2;  % apply other transforms apart from translation (the precise transforms being defined by user variables)
+            M3(:,4) = T;  % Restore the translation
+            disp(M);
+            disp(M2);
+            disp(M3);
             M = M3;
+            % TODO: recenter the origin to middle of the brain?
         end
         % Apply the reorientation on the input image header and save back the new coordinations in the original input file
         spm_get_space(inputpath, M*input_vol.mat);
