@@ -1,4 +1,11 @@
-function autoreorient(inputpath, mode, flags_affine)
+function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale)
+    if ~exist('noshearing', 'var')
+        noshearing = true;
+    end
+    if ~exist('isorescale', 'var')
+        isorescale = true;
+    end
+
     input_vol = spm_vol(strtrim(inputpath));
     smoothed_vol = spm_vol(inputpath);
     smoothed_vol2 = spm_smoothto8bit(smoothed_vol, 20);
@@ -8,7 +15,7 @@ function autoreorient(inputpath, mode, flags_affine)
     if strcmp(mode, 'affine')
         fprintf('Affine reorientation\n');
         %flags = struct('sep', 5, 'regtype', 'rigid');
-        if exist('flags_affine', 'var') & ~isempty(flags_affine)
+        if exist('flags_affine', 'var') && ~isempty(flags_affine)
             flags = flags_affine;
             if isarray(flags_affine.sep)
                 % If we are provided a vector of sampling steps, spm_affreg() does not support multiple sampling steps (contrary to spm_coreg()), so we manage that manually
@@ -39,6 +46,48 @@ function autoreorient(inputpath, mode, flags_affine)
         %MTransform = template_vol.mat \ M * input_vol.mat;  % from spm_affreg doc
         % TODO: shearing is applied, decompose the transform to avoid shearing (but allow isotropic scaling?)
         M = template_vol.mat \ M;
+        if noshearing || isorescale
+            % If noshearing or isorescale, we will decompose the 3D affine transform matrix M into a rotation matrix Q, a scaling matrix K, and a shearing matrix S.
+
+            % Factor out the translation, by simply removing 4th column (4th column being the translation, so it's factored out, as hinted by https://math.stackexchange.com/questions/1120209/decomposition-of-4x4-or-larger-affine-transformation-matrix-to-individual-variab)
+            % Note that SPM applies 3D transform matriecs in column-major form (translations are on the right side of the transform matrix M - note that SPM uses the column-major form usually, whereas the MATLAB doc uses the row-major form, for more infos about the difference, see: https://www.youtube.com/watch?v=UvevHXITVG4)
+            % About 3D affine transforms, see also: https://www.youtube.com/watch?v=RqZH-7hlI48
+            Mnotrans = M(1:3,1:3);  % remove the translation vector (4th column) from the matrix, that's an easy way to factor out the translation vector (so we only have the other transforms to decompose)
+            T = M(:, 4);  % the 3D translation vector is the last column of the M matrix because we use the column-major form
+            % Sanity check
+            assert(size(Mnotrans, 1) == size(Mnotrans, 2))  % only allow square matrices, not sure if it works on non-square ones
+            assert(single(det(Mnotrans)) ~= 0.0)  % determinant is non-zero
+
+            % QR Decomposition to extract the rotation matrix Q and the scaling+shearing matrix R
+            % See https://math.stackexchange.com/questions/1120209/decomposition-of-4x4-or-larger-affine-transformation-matrix-to-individual-variab/2353782#2353782
+            % An alternative is to use the SVD, which will decompose the affine without translation into 2 rotation matrices + 1 anisotropic rescaling: https://en.wikipedia.org/wiki/Singular_value_decomposition#/media/File:Singular-Value-Decomposition.svg
+            [Q, R] = qr(Mnotrans);
+            % Decompose R into the scaling matrix K and shearing matrix S
+            % Compute the scaling matrix K and its inverse, by simply creating K from the main diagonal of R (the rest of the matrix being zero)
+            K = eye(size(Mnotrans));
+            K(1:size(R,1)+1:end) = diag(R);  % anisotropic rescaling (necessary to compute the accurate inverse and then the shearing matrix S)
+            if isorescale
+                % Compute the isotropic scaling matrix K if required
+                Kiso = eye(size(Mnotrans));
+                Kiso(1:size(R,1)+1:end) = mean(diag(R));  % compute the average rescaling factor, so we rescale but isotropically (ie, the same rescaling factor in all directions)
+            end
+            Kinv = eye(size(Mnotrans));
+            Kinv(1:size(R,1)+1:end) = 1 ./ diag(R);  % the inv(K) == the reciprocals (inverse) of the diagonal values in R
+            % Compute the shearing matrix S, by removing K from R (so the main diagonal will be zero in S)
+            S = Kinv*R;
+            % Sanity checks
+            % See also what each 3D affine transform look like: https://www.tutorialspoint.com/computer_graphics/3d_transformation.htm
+            % Q is a rotation matrix if its determinant equals to 1
+            assert(single(det(Q)) == 1.0);
+            % K is a scaling matrix if all non-diagonal values are 0
+            assert(all(all((triu(K, 1)+tril(K,-1)) == 0)));
+            % S is a shearing matrix if:
+            assert(single(det(S)) == 1.0);  % its determinant equals to 1
+            assert(all(diag(S) == 1));  % all its main diagonal values equal to 1
+            assert(all(eig(S) == 1));  % all eigenvalues equal to 1
+            assert((rank(S) == trace(S)) && (trace(S) == size(Mnotrans, 1)));  % its trace equals its rank equals the NxN size of the 3D affine transform matrix
+        end
+        keyboard
         % Apply the reorientation and save back the new coordinations in the original input file
         spm_get_space(inputpath, M*input_vol.mat);
     else
