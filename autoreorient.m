@@ -69,8 +69,11 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale)
             if isorescale
                 % Compute the isotropic scaling matrix K if required
                 Kiso = eye(size(Mnotrans));
-                Kiso(1:size(R,1)+1:end) = mean(abs(diag(R))) .* sign(diag(R));  % compute the average rescaling factor, so we rescale but isotropically (ie, the same rescaling factor in all directions). We first calculate the mean of absolute values, and then we restore the sign. The sign is important because the decomposition may place in the rescaling matrix K a mirroring rescale (ie, the rotation Q will rotate in the opposite direction as the one we want, but rescaling in the negative direction -1 will mirror the brain and put it back in place).
-                % TODO: big issue: mirroring will inverse the place of gray matter? Left side of brain will be on the right side? Then we certainly don't want that!
+                %Kiso(1:size(R,1)+1:end) = mean(abs(diag(R))) .* sign(diag(R));  % compute the average rescaling factor, so we rescale but isotropically (ie, the same rescaling factor in all directions). We first calculate the mean of absolute values, and then we restore the sign. The sign is important because the decomposition may place in the rescaling matrix K a mirroring rescale (ie, the rotation Q will rotate in the opposite direction as the one we want, but rescaling in the negative direction -1 will mirror the brain and put it back in place). - DEPRECATED: big issue: if some scaling values have a negative sign, this will produce a mirroring which will inverse the place of gray matter and the rest of the brain! Not good, left side of brain will be on the right side, we certainly don't want that!
+                Kiso(1:size(R,1)+1:end) = mean(abs(diag(R)));
+                if any(sign(diag(R)) == -1)
+                    error('Some rescaling values are negative, this will produce a mirroring effect!');  % TODO: work around this issue: when negative sign is detected, do a 180° rotation instead in the direction?
+                end
             end
             Kinv = eye(size(Mnotrans));
             Kinv(1:size(R,1)+1:end) = 1 ./ diag(R);  % the inv(K) == the reciprocals (inverse) of the diagonal values in R
