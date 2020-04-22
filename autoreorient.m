@@ -5,6 +5,9 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
     if ~exist('isorescale', 'var')
         isorescale = true;
     end
+    if ~exist('affdecomposition', 'var')
+        affdecomposition = 'qr';
+    end
 
     input_vol = spm_vol(strtrim(inputpath));
     smoothed_vol = spm_vol(inputpath);
@@ -14,9 +17,7 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
     template_vol = spm_vol(strtrim('C:\git\auto_acpc_reorient\T1_template_CAT12_rm_withskull.nii'));
     if strcmp(mode, 'affine')
         fprintf('Affine reorientation\n');
-        %flags = struct('sep', 5, 'regtype', 'rigid');
         if exist('flags_affine', 'var') && ~isempty(flags_affine)
-            flags = flags_affine;
             if isarray(flags_affine.sep)
                 % If we are provided a vector of sampling steps, spm_affreg() does not support multiple sampling steps (contrary to spm_coreg()), so we manage that manually
                 sampling_steps = flags_affine.sep;
@@ -26,11 +27,13 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
             end
         else
             % Default flags for affine coregistration
-            flags_affine = struct('regtype', 'mni');
+            flags_affine = struct('regtype', 'mni');  % BE CAREFUL: spm_affreg() can introduce reflections, even when using 'rigid' mode! Then decomposition is necessary to ensure left and right sides of the brain are maintained in the correct orientation without mirroring!
             % Default sampling steps
             sampling_steps = [10 5];
         end
-        
+        % Load the flags (will change the sep field after each iteration)
+        flags = flags_affine;
+
         % Initialize the transform matrix M (using eye() as is done in spm_affreg())
         M = eye(4);
         scal = 1.0;
@@ -43,11 +46,17 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
             %smoothed_vol2.mat = template_vol.mat \ M * smoothed_vol2.mat;  % apply the reorientation transform in-memory
         end %endfor
         % Calculate the transform from the input to the template (I think that spm_affreg is giving us the inverse: from the template to the input)
-        %MTransform = template_vol.mat \ M * input_vol.mat;  % from spm_affreg doc
-        % TODO: shearing is applied, decompose the transform to avoid shearing (but allow isotropic scaling?)
-        M = template_vol.mat \ M;
+        M = template_vol.mat \ M;  % from spm_affreg() doc, then do M * input_vol.mat to apply the transform (like any column-major transform matrix). Beware, test det(M) to check if the rotation is proper or not (ie, if there is a reflection), it can appear after this step rather than as the result of spm_affreg().
 
         % Post-processing: constraint the transform to be semi-rigid-body (ie, no shearing, only isotropic scaling allowed, etc)
+        % Tuto for debugging: simple calculations (like imcalc but more freedom) in SPM: http://imaging.mrc-cbu.cam.ac.uk/imaging/BasicProgrammingWithSpm
+        % Can be used to tag a part of the brain to better highlight what transforms are done (and check there is no reflection):
+        % V1=spm_vol('t1.nii');
+        % Y1=spm_read_vols(V1);
+        % Y1(100:140, 160:200, 91:140) = max(max(max(Y1)));
+        % V3 = V1;
+        % V3.fname='t12.nii';
+        % spm_write_vol(V3,Y1);
         if ~isempty(affdecomposition)
             % Factor out the translation, by simply removing 4th column (4th column being the translation, so it's factored out, as hinted by https://math.stackexchange.com/questions/1120209/decomposition-of-4x4-or-larger-affine-transformation-matrix-to-individual-variab)
             % Note that SPM applies 3D transform matriecs in column-major form (translations are on the right side of the transform matrix M - note that SPM uses the column-major form usually, whereas the MATLAB doc uses the row-major form, for more infos about the difference, see: https://www.youtube.com/watch?v=UvevHXITVG4 )
@@ -63,11 +72,12 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
                 fprintf('Using QR decomposition...\n')
                 % QR Decomposition to extract the rotation matrix Q and the scaling+shearing matrix R
                 % See https://math.stackexchange.com/questions/1120209/decomposition-of-4x4-or-larger-affine-transformation-matrix-to-individual-variab/2353782#2353782
-                [Q, R] = qr(Mnotrans);
+                [Q, R] = qr(Mnotrans);  % pure MATLAB implementations can be found at: http://web.mit.edu/18.06/www/Essays/gramschmidtmat.pdf and https://blogs.mathworks.com/cleve/2016/07/25/compare-gram-schmidt-and-householder-orthogonalization-algorithms/ and https://blogs.mathworks.com/cleve/2016/10/03/householder-reflections-and-the-qr-decomposition/#742ad311-5d1b-4b5d-8768-11799d40f72d
                 %[Q, R] = lu(Mnotrans);  % alternative
-                D = diag(sign(diag(R)));
-                Q = Q*D;
-                R = D*R;
+                % Enforce positive main diagonal, but at the expense of making an improper rotational matrix Q (ie, with reflection), so it's not satisfactory either... https://www.mathworks.com/matlabcentral/answers/83798-sign-differences-in-qr-decomposition#answer_93385
+                %D = diag(sign(diag(R)));
+                %Q = Q*D;
+                %R = D*R;
                 % Decompose R into the scaling matrix K and shearing matrix S
                 % Compute the scaling matrix K and its inverse, by simply creating K from the main diagonal of R (the rest of the matrix being zero)
                 K = eye(size(Mnotrans));
@@ -77,9 +87,6 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
                     Kiso = eye(size(Mnotrans));
                     %Kiso(1:size(R,1)+1:end) = mean(abs(diag(R))) .* sign(diag(R));  % compute the average rescaling factor, so we rescale but isotropically (ie, the same rescaling factor in all directions). We first calculate the mean of absolute values, and then we restore the sign. The sign is important because the decomposition may place in the rescaling matrix K a mirroring rescale (ie, the rotation Q will rotate in the opposite direction as the one we want, but rescaling in the negative direction -1 will mirror the brain and put it back in place). - DEPRECATED: big issue: if some scaling values have a negative sign, this will produce a mirroring which will inverse the place of gray matter and the rest of the brain! Not good, left side of brain will be on the right side, we certainly don't want that!
                     Kiso(1:size(R,1)+1:end) = mean(abs(diag(R)));
-                    %if any(sign(diag(R)) == -1)
-                        %error('Some rescaling values are negative, this will produce a mirroring effect!');  % TODO: work around this issue: when negative sign is detected, do a 180° rotation instead in the direction?
-                    %end
                 end
                 Kinv = eye(size(Mnotrans));
                 Kinv(1:size(R,1)+1:end) = 1 ./ diag(R);  % the inv(K) == the reciprocals (inverse) of the diagonal values in R
@@ -87,11 +94,12 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
                 S = Kinv*R;
                 % Sanity checks
                 % See also what each 3D affine transform look like: https://www.tutorialspoint.com/computer_graphics/3d_transformation.htm and https://stackoverflow.com/questions/5107134/find-the-rotation-and-skew-of-a-matrix-transformation?rq=1
-                % Q is a rotation matrix if its determinant equals to 1
-                keyboard
-                if single(det(Q)) == -1.0
-                    error('QR decomposition led to an improper rotational matrix Q (rotation+reflection), cannot continue.');
+                % Check if there is any reflection, we don't want that
+                if (single(det(Q)) == -1.0) || any(sign(diag(K)) == -1)
+                % TODO: rotate 180 degrees when reflection is detected and skip error
+                    error('QR decomposition led to an improper rotational matrix Q (rotation+reflection) or scaling matrix K (negative factors), cannot continue.');
                 end
+                % Q is a proper rotation matrix if its determinant equals to 1
                 assert(single(det(Q)) == 1.0);  % a proper rotation matrix will have a determinant of 1. This means that it's a "pure" rotational matrix, with no other transform (such as reflection/mirroring). See: https://www.tau.ac.il/~tsirel/dump/Static/knowino.org/wiki/Euler%27s_theorem_(rotation).html#Matrix_proof
                 % K is a scaling matrix if all non-diagonal values are 0
                 assert(all((triu(K, 1)+tril(K,-1)) == 0, [1 2]));
@@ -117,6 +125,14 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
                 if ~noshearing
                     M2 = M2 * S;
                 end %endif
+                % Reconstruct a 4x4 affine transform matrix (so that we can put back the translation column vector)
+                M3 = eye(size(M));  % the basis needs to be an identity matrix, see: https://www.youtube.com/watch?v=UvevHXITVG4
+                M3(1:3,1:3) = M2;  % apply other transforms apart from translation (the precise transforms being defined by user variables)
+                M3(:,4) = T;  % Restore the translation
+                disp(M);
+                disp(M2);
+                disp(M3);
+                M = M3;
             elseif strcmp(affdecomposition, 'svd')
                 % In SVD decomposition mode, we will decompose the affine without translation into 2 rotation matrices + 1 anisotropic rescaling in the middle (with the combination of the rescaling and subsequent rotation to a shearing): https://en.wikipedia.org/wiki/Singular_value_decomposition#/media/File:Singular-Value-Decomposition.svg
                 % Pros and cons of using a SVD: unique decomposition (main diagonal is positive), no shearing (containing in the scaling matrix S * last rotational matrix), con is that shearing cannot be separated and hence although it can be removed, the transform will be less faithful to the original non constrained affine transform (but it's ok if regtype = rigid, but not if using mni for example)
@@ -127,19 +143,55 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
                     % Compute the mean of the rescaling factor to do only isotropic rescaling (and not anisotropic)
                     s = diag(mean(abs(diag(s))) * [1 1 1]);
                 end
+                % Sanity check: prevent any reflection/mirroring
+                if (single(det(u)) == -1 || single(det(v')) == -1 || any(sign(diag(s)) == -1))
+                    % TODO: rotate 180 degrees when reflection is detected and skip error
+                    error('Reflections detected in the decomposed matrices, cannot continue!');
+                end
                 M2 = u*s*v';  % apply other transforms apart from translation (the precise transforms being defined by user variables)
+                % Reconstruct a 4x4 affine transform matrix (so that we can put back the translation column vector)
+                M3 = eye(size(M));  % the basis needs to be an identity matrix, see: https://www.youtube.com/watch?v=UvevHXITVG4
+                M3(1:3,1:3) = M2;  % apply other transforms apart from translation (the precise transforms being defined by user variables)
+                M3(:,4) = T;  % Restore the translation
+                disp(M);
+                disp(M2);
+                disp(M3);
+                M = M3;
+            elseif strcmp(affdecomposition, 'imatrix')
+                % Decompose and constraint reflections/shearing using spm_imatrix
+                % DEPRECATED: this does NOT work because the parameters are dependent on the order in which they are applied (default: inverse of 'T*R*Z*S' in SPM, see help spm_matrix), so it's not possible to simply modify some parameters and leave the rest as-is, the whole final transform gets out of control. A decomposition is necessary.
+
+                % Extract the transform parameters as a vector from the 3D affine transform matrix
+                iM = spm_imatrix(M);
+                % Multiple assign each parameter into its own variable (see help spm_matrix: T for translation, R rotation, Z zoom/scale, S shearing)
+                iM2 = mat2cell(iM, 1, ones(1,4)*3);
+                [T, R, Z, S] = iM2{:};
+                % Nullify shearing if option is enabled
+                if noshearing
+                    S = zeros(1, 3);
+                end
+                % If there are any reflections in the scaling matrix Z (negative factors), then apply a 180° rotation (pi) instead in the same axis (this is not equivalent but it's better than nothing - the best is to afterward do another coregistration, based on joint histogram for example, to clean up the residual coregistration errors)
+                R = R + (sign(Z) == -1)*pi;  % TODO: buggy
+                % Turn negative scaling factors to positive (ie, this removes reflections)
+                Z = Z .* sign(Z);
+                if isorescale
+                    % If isotropic scaling is required by user, compute the mean rescaling and apply the same scaling factor in all dimensions
+                    Z = ones(1,3) * mean(abs(Z));
+                end
+                % Convert the vector back to a 3D affine transform matrix
+                % Note that the order of the operations can be changed, see help spm_matrix for more information about default order and how to change
+                M = spm_matrix([T R Z S], 'T*R*Z*S');
             end %endif
-            % Reconstruct a 4x4 affine transform matrix (so that we can put back the translation column vector)
-            M3 = eye(size(M));  % the basis needs to be an identity matrix, see: https://www.youtube.com/watch?v=UvevHXITVG4
-            M3(1:3,1:3) = M2;  % apply other transforms apart from translation (the precise transforms being defined by user variables)
-            M3(:,4) = T;  % Restore the translation
-            disp(M);
-            disp(M2);
-            disp(M3);
-            M = M3;
             % TODO: recenter the origin to middle of the brain?
         end %endif
+        % Sanity check: check if there is no reflections nor shearing
+        [T, R, Z, S] = get_imat(M);
+        assert(~any(sign(Z) == -1));
+        if noshearing
+            assert(sum(S) < 0.000001);
+        end
         % Apply the reorientation on the input image header and save back the new coordinations in the original input file
+        % Some inspiration by BSD-2 licensed: https://github.com/jimmyshen007/NeMo/blob/c7cc775e7fc84f84255b0d3fa474b7f955e817f5/mymfiles/eve_tools/Structural_Connectivity/approx_coreg2MNI.m - licensed under BSD-2-Clause (compatible with MIT license anyway)
         %spm_get_space(inputpath, M*input_vol.mat);
         spm_get_space(inputpath, M*input_vol.mat);
     else
@@ -154,7 +206,14 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
     fprintf('Autoreorientation done!\n');
 end %endfunction
 
-% Partially inspired under fair use by: https://github.com/jimmyshen007/NeMo/blob/c7cc775e7fc84f84255b0d3fa474b7f955e817f5/mymfiles/eve_tools/Structural_Connectivity/approx_coreg2MNI.m - licensed under BSD-2-Clause (compatible with MIT license anyway)
-% BESTTUTO: simple calculations (like imcalc but more freedom) in SPM: http://imaging.mrc-cbu.cam.ac.uk/imaging/BasicProgrammingWithSpm
-% fieldtrip also implements align_ctf2spm(mri, opt, template)
-% hMRI also implements an auto-reorient: https://www.researchgate.net/figure/Left-After-installation-Section-31-the-hMRI-toolbox-can-be-started-from-the-SPM-menu_fig1_330530392 - extension of Christophe Phillips code by Evelyne Balteau, direct link: https://github.com/hMRI-group/hMRI-toolbox/blob/master/hmri_autoreorient.m
+function [T, R, Z, S] = get_imat(M)
+% [T, R, Z, S] = get_imat(M)
+% Calculate the parameters of an affine transform using spm_imatrix and returns 4 vectors (translation T, rotation R, scale/zoom Z and shearing S)
+% Note: this is NOT like a decomposition, because the parameters are dependent on the order in which they are applied (default: inverse of 'T*R*Z*S' in SPM, see help spm_matrix)
+
+    % Extract the transform parameters as a vector from the 3D affine transform matrix
+    iM = spm_imatrix(M);
+    % Multiple assign each parameter into its own variable (see help spm_matrix: T for translation, R rotation, Z zoom/scale, S shearing)
+    iM2 = mat2cell(iM, 1, ones(1,4)*3);
+    [T, R, Z, S] = iM2{:};
+end %endfunction
