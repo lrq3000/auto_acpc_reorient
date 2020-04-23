@@ -1,4 +1,4 @@
-function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, affdecomposition, precoreg, debug)
+function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, affdecomposition, precoreg, precoreg_reset_orientation, debug)
 % DEVELOPMENT FUNCTION
 % This function is kept as a minified version of the core routine to do autoreorientation using SPM12 functions. This is kept for development purposes (to quickly debug out only the core routines), do not use it for production.
 % affdecomposition defines the decomposition done to ensure structure is maintained (ie, no reflection nor shearing). Can be: qr (default), svd (deprecated), imatrix or none. Only the qr decomposition ensures the structure is maintained.
@@ -18,13 +18,42 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
     if ~exist('debug', 'var')
         debug = false;
     end
+    if ~exist('precoreg_reset_orientation', 'var')
+        % before coregistration, reset to scanner orientation?
+        % value can be: 'raw' or 'scanner' (equals to 'mat0') or false
+        precoreg_reset_orientation = false;
+    end
 
+    % Load input and template images
     input_vol = spm_vol(strtrim(inputpath));
+    template_vol = spm_vol(strtrim('T1_template_CAT12_rm_withskull.nii'));
+
+    if precoreg_reset_orientation ~= false
+        if strcmp(precoreg_reset_orientation, 'raw')
+            % raw original voxel space with no orientation
+            % get voxel size
+            vox = sqrt(sum(input_vol.mat(1:3, 1:3).^2));
+            % build resetted matrix basis, based simply on the voxel scaling, but reset the whole orientation
+            M = diag([vox 1]);
+            % get centroid, we will set the origin on it (ie, the translation part of the M orientation matrix)
+            input_centroid = get_centroid(input_vol, true, false, debug);
+            M(1:3,4) = (-vox .* input_centroid(1:3))';
+            % save back into the file
+            spm_get_space(inputpath, M);
+            input_vol.mat = M;
+        elseif strcmp(precoreg_reset_orientation, 'scanner') || strcmp(precoreg_reset_orientation, 'mat0')
+            % original orientation set by the scanner
+            % simply reload mat0 and overwrite the current orientation matrix
+            input_vol.mat = input_vol.private.mat0;
+            spm_get_space(inputpath, input_vol.mat);
+        end
+    end
+
+    % Smooth input image, helps a lot with the coregistration (which is inherently noisy since there is no perfect match)
     smoothed_vol = spm_vol(inputpath);
     smoothed_vol2 = spm_smoothto8bit(smoothed_vol, 20);
     % Y = spm_read_vols(smoothed_vol2);  % direct access to the data matrix
     % imagesc(Y(:,:,20))  % show a slice
-    template_vol = spm_vol(strtrim('T1_template_CAT12_rm_withskull.nii'));
 
     % Manual/Pre coregistration (without using SPM)
     if precoreg
@@ -40,7 +69,7 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
         % This effectively resets the origin onto the centroid (nifti viewers such as MRIcron or SPM will apply the transform in a vol.premul matrix before the rest)
         M = input_vol.mat;
         M(1:3,4) = M(1:3,4) - input_centroid_voxel(1:3)';  % set the origin onto the centroid
-        M(1:3,4) = M(1:3,4) + i2t_dist(1:3)';  % shift some more to match where the origin is in the template compared to its own centroid. Not sure this step is necessary since anyway we certainly won't end up in the AC-PC, but well why not, it may bridge some more the relative distance between the template origin and input volume origin.
+        %M(1:3,4) = M(1:3,4) + i2t_dist(1:3)';  % shift some more to match where the origin is in the template compared to its own centroid. Not sure this step is necessary since anyway we certainly won't end up in the AC-PC, but well why not, it may bridge some more the relative distance between the template origin and input volume origin. DEPRECATED: unreliable, it's preferable to stick to the centroid
         % Note: at this point, we should also set the template's origin on its centroid to leave only the rotation and scale to be estimated afterwards. But since we provide a template with the origin on the AC-PC, it's an even better origin, so we skip this step here. If the template did not have the origin on AC-PC, then setting the origin on its centroid would be a good thing to do, see: http://nghiaho.com/?page_id=671.
         % Save into the original file
         spm_get_space(inputpath, M);
