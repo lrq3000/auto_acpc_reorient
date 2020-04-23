@@ -443,3 +443,11 @@ end  %endfunction
 % reflections do not preserve orientation: https://4.files.edl.io/b164/01/17/19/172157-1eb4742a-f536-4b4b-bcc2-0c13410a9fa7.pdf
 % rotations of 180° are equivalent to a reflection through the origin? Not for reflection asymmetrical objects!
 % 2 reflections = 1 rotation: https://www.euclideanspace.com/maths/geometry/rotations/theory/as2reflections/index.htm
+
+% Manual rotational and scaling realignment? Without reflections?
+% BEST RESOURCE: superimpose3D in Python, but no isometric rescaling nor anti-reflection countermeasures (but can implement them + dicom support, would be a pure python implementation of reorientation): https://github.com/jewettaij/superpose3d
+% See also this great tutorial: http://nghiaho.com/?page_id=671
+% and this great paper: http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.173.2196&rep=rep1&type=pdf
+% and this SO question: https://scicomp.stackexchange.com/questions/10584/purely-rotational-least-squares-match
+% and An Approximate and Efficient Method for Optimal Rotation Alignment of 3D Models
+% BEST: and Least-Squares Rigid Motion Using SVD, by Olga Sorkine-Hornung and Michael Rabinovich, 2017 - in particular the entry: "Orientation rectification"
