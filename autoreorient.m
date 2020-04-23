@@ -159,23 +159,31 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
                     [u, s] = improper_rotation_to_proper(u, s);
                 end %endif
                 if single(det(v')) == -1
-                    [v, s] = improper_rotation_to_proper(v', s);
-                    v = v';
+                    % Since reflections are non-commutative (because of the order in matrix multiplication), then we can't just transfer the reflections in v' to s, we need to transfer to a new scaling matrix s2
+                    % See for more details this excellent document on rotations and reflections in 3D: http://scipp.ucsc.edu/~haber/ph251/rotreflect_17.pdf
+                    [v2, s2] = qr(v');
+                    [v2, s2] = improper_rotation_to_proper(v2, s2);
+                    v = v2';
+                else
+                    % if v' is already a proper rotation matrix, we simply create a dummy scaling matrix s2 as an identity matrix
+                    s2 = eye(size(v'));
                 end %endif
                 % Remove/balance out the reflections in s
                 s = remove_reflections(s);
+                s2 = remove_reflections(s2);
                 % Isotropic rescaling / no shearing?
                 if isorescale || noshearing
                     % Compute the mean of the rescaling factor to do only isotropic rescaling (and not anisotropic)
                     % In SVD mode, the shearing is done in the scaling matrix, so we can't separate both transforms, if we remove one we remove both
                     s = diag(mean(abs(diag(s))) * sign(diag(s)));  % don't forget to restore the sign to balance out the reflections
+                    s2 = diag(mean(abs(diag(s2))) * sign(diag(s2)));
                 end
                 % Sanity check: check if there is any remaining imbalanced reflection/mirroring
                 if single(det(u)) == -1 || single(det(v')) == -1 || (any(sign(diag(s)) == -1) && are_reflections_imbalanced(s))
                     error('Reflections detected in the decomposed matrices, cannot continue!');
                 end
                 % Combine back all transforms
-                M2 = u*s*v';  % apply other transforms apart from translation (the precise transforms being defined by user variables)
+                M2 = u*s*v'*s2;  % apply other transforms apart from translation (the precise transforms being defined by user variables)
                 % Reconstruct a 4x4 affine transform matrix (so that we can put back the translation column vector)
                 M3 = eye(size(M));  % the basis needs to be an identity matrix, see: https://www.youtube.com/watch?v=UvevHXITVG4
                 M3(1:3,1:3) = M2;  % apply other transforms apart from translation (the precise transforms being defined by user variables)
