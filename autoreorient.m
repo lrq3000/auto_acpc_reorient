@@ -310,6 +310,7 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
     else
         % Joint Histogram coregistration
         % Keep in mind only rotations can be done, which excludes reflections (that's good), but also rescaling, including isotropic rescaling (that's bad), so we need another step (such as affine reorientation) before to be able to rescale as necessary, and also translate (although this coregistration is invariant to translations, if you try to coregister manually after or do between-subjects coregistration this will be an issue)
+        % Note also that spm_coreg() will try to set the input volume's origin to match the template's origin (hence on AC-PC)
         fprintf('Joint Histogram (mutual information) reorientation\n');
         flags = struct('sep', [4, 2]);
         flags.cost_fun = 'ecc';  % ncc works remarkably well, when it works, else it fails very badly... Also ncc should only be used for within-modality coregistration (TODO: test if for reorientation it works well, even on very damaged/artefacted brains?)
@@ -494,3 +495,5 @@ end  %endfunction
 % BEST: and Least-Squares Rigid Motion Using SVD, by Olga Sorkine-Hornung and Michael Rabinovich, 2017 - in particular the entry: "Orientation rectification"
 % SPM's normalize function uses the origin as a starting estimate, according to Chris Rorden: https://github.com/rordenlab/spmScripts/blob/master/nii_setOrigin.m - BTW it reuses the coregistration parameters from K.Nemoto https://web.archive.org/web/20180727093129/http://www.nemotos.net/scripts/acpc_coreg.m
 
+% best results: autoreorient('t1.nii', 'mi', [], false, false, 'none', true, 'scanner', true)
+% good result but not exactly on AC-PC: best results: autoreorient('t1.nii', 'mi', [], false, false, 'none', true, 'raw', true)
