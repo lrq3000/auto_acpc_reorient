@@ -1,4 +1,4 @@
-function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, affdecomposition, precoreg)
+function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, affdecomposition, precoreg, debug)
 % DEVELOPMENT FUNCTION
 % This function is kept as a minified version of the core routine to do autoreorientation using SPM12 functions. This is kept for development purposes (to quickly debug out only the core routines), do not use it for production.
 % affdecomposition defines the decomposition done to ensure structure is maintained (ie, no reflection nor shearing). Can be: qr (default), svd (deprecated), imatrix or none. Only the qr decomposition ensures the structure is maintained.
@@ -15,6 +15,9 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
     if ~exist('precoreg', 'var')
         precoreg = true;
     end
+    if ~exist('debug', 'var')
+        debug = false;
+    end
 
     input_vol = spm_vol(strtrim(inputpath));
     smoothed_vol = spm_vol(inputpath);
@@ -27,22 +30,31 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
     if precoreg
         fprintf('Pre-coregistration by translation of centroid, please wait...\n');
         % Find the center of mass
-        input_centroid = [get_centroid(input_vol) 1];  % add a unit factor to be able to add the translation of the world-to-voxel mapping in the nifti headers, see: https://www.youtube.com/watch?v=UvevHXITVG4
-        template_centroid = [get_centroid(template_vol) 1];
-        input_centroid_voxel = (input_vol.mat * input_centroid')';  % convert to voxel space by applying the nifti header transform
+        input_centroid = [get_centroid(input_vol, true, false, debug) 1];  % add a unit factor to be able to add the translation of the world-to-voxel mapping in the nifti headers, see: https://www.youtube.com/watch?v=UvevHXITVG4
+        template_centroid = [get_centroid(template_vol, true, false, debug) 1];
+        input_centroid_voxel = (input_vol.mat * input_centroid')';  % convert from raw/scanner voxel space to current orientation voxel space (ie, this represents the distance in voxels from the current origin to the centroid, in other words this is the centroid position relative to the currently set origin)
         template_centroid_voxel = (template_vol.mat * template_centroid')';
-        % Calculate the euclidian distance = translation transform from the input to the template centroid
-        i2t_dist = template_centroid_voxel - input_centroid_voxel;
-        % Apply the translation on the nifti header world-to-voxel transform
+        % Calculate the euclidian distance = translation transform from the input to the template centroid, we also resize to match the input volume's space (which may be bigger or smaller - if bigger, then we need to reduce the number of voxels we move)
+        i2t_dist = (template_centroid_voxel(1:3) - input_centroid_voxel(1:3)) .* (template_vol.dim ./ input_vol.dim);
+        % Apply the translation on the nifti header voxel-to-world transform
+        % This effectively resets the origin onto the centroid (nifti viewers such as MRIcron or SPM will apply the transform in a vol.premul matrix before the rest)
         M = input_vol.mat;
-        M(:,4) = M(:,4) + i2t_dist';
+        M(1:3,4) = M(1:3,4) - input_centroid_voxel(1:3)';  % set the origin onto the centroid
+        M(1:3,4) = M(1:3,4) + i2t_dist(1:3)';  % shift some more to match where the origin is in the template compared to its own centroid. Not sure this step is necessary since anyway we certainly won't end up in the AC-PC, but well why not, it may bridge some more the relative distance between the template origin and input volume origin.
+        % Note: at this point, we should also set the template's origin on its centroid to leave only the rotation and scale to be estimated afterwards. But since we provide a template with the origin on the AC-PC, it's an even better origin, so we skip this step here. If the template did not have the origin on AC-PC, then setting the origin on its centroid would be a good thing to do, see: http://nghiaho.com/?page_id=671.
         % Save into the original file
         spm_get_space(inputpath, M);
+        if debug, spm_get_space([inputpath(1:end-4) '-centroid.nii'], M); end;
         %spm_get_space([inputpath(1:end-4) '-centroid.nii'], M);  % debug line, save the same transform on the image where the centroid is made visible
         % Apply the new mapping in the already loaded images including smoothed (this avoids the need to reload the input volume and resmooth it)
         input_vol.mat = M;
         smoothed_vol.mat = M;
         smoothed_vol2.mat = M;
+        % SPM provides 3 ways to save nifti files:
+        % * spm_get_space(vol, transform) to only modify the world-to-voxel mapping headers (vol.mat)
+        % * spm_write_vol(vol, vol_data) where vol_data is a 3D matrix of the content of the nifti, and vol a nifti structure as accepted or created by spm using spm_read_vols().
+        % * create(vol) where vol is a spm nifti structure as created by nifti(), and it will be saved in vol.fname path. This last option is the most complete, as it will save everything.
+        %spm_write_vol(input_vol, input_vol.mat);
         fprintf('Pre-coregistration done!\n');
     end
 
@@ -225,7 +237,7 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
                 fprintf('Using spm_imatrix decomposition...\n')
 
                 % Extract the transform parameters as a vector from the 3D affine transform matrix
-                iM = spm_imatrixfix(M);
+                iM = spm_imatrix(M);
                 assert(all(single(spm_matrix(iM)) == single(M), [1 2]));  % sanity check: check that we can reconstruct the original transform matrix
                 % Multiple assign each parameter into its own variable (see help spm_matrix: T for translation, R rotation, Z zoom/scale, S shearing)
                 iM2 = mat2cell(iM, 1, ones(1,4)*3);
@@ -270,7 +282,7 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
         % Joint Histogram coregistration
         % Keep in mind only rotations can be done, which excludes reflections (that's good), but also rescaling, including isotropic rescaling (that's bad), so we need another step (such as affine reorientation) before to be able to rescale as necessary, and also translate (although this coregistration is invariant to translations, if you try to coregister manually after or do between-subjects coregistration this will be an issue)
         fprintf('Joint Histogram (mutual information) reorientation\n');
-        flags = struct('sep', 5);
+        flags = struct('sep', [4, 2]);
         flags.cost_fun = 'ecc';  % ncc works remarkably well, when it works, else it fails very badly... Also ncc should only be used for within-modality coregistration (TODO: test if for reorientation it works well, even on very damaged/artefacted brains?)
         flags.tol = [0.02, 0.02, 0.02, 0.001, 0.001, 0.001, 0.01, 0.01, 0.01, 0.001, 0.001, 0.001];  % VERY important to get good results, these are defaults from the GUI
         % spm_coreg can only find a rigid-body rotation, but pre-translation is not necessary for spm_coreg to work because it's working directly on joint histograms, so empty space is meaningless. Also there is no need to do a QR decomposition here since it's rigid-body.
@@ -451,3 +463,5 @@ end  %endfunction
 % and this SO question: https://scicomp.stackexchange.com/questions/10584/purely-rotational-least-squares-match
 % and An Approximate and Efficient Method for Optimal Rotation Alignment of 3D Models
 % BEST: and Least-Squares Rigid Motion Using SVD, by Olga Sorkine-Hornung and Michael Rabinovich, 2017 - in particular the entry: "Orientation rectification"
+% SPM's normalize function uses the origin as a starting estimate, according to Chris Rorden: https://github.com/rordenlab/spmScripts/blob/master/nii_setOrigin.m - BTW it reuses the coregistration parameters from K.Nemoto https://web.archive.org/web/20180727093129/http://www.nemotos.net/scripts/acpc_coreg.m
+
