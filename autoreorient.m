@@ -1,4 +1,4 @@
-function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, affdecomposition)
+function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, affdecomposition, precoreg)
 % DEVELOPMENT FUNCTION
 % This function is kept as a minified version of the core routine to do autoreorientation using SPM12 functions. This is kept for development purposes (to quickly debug out only the core routines), do not use it for production.
 % affdecomposition defines the decomposition done to ensure structure is maintained (ie, no reflection nor shearing). Can be: qr (default), svd (deprecated), imatrix or none. Only the qr decomposition ensures the structure is maintained.
@@ -12,13 +12,41 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
     if ~exist('affdecomposition', 'var')
         affdecomposition = 'qr';
     end
+    if ~exist('precoreg', 'var')
+        precoreg = true;
+    end
 
     input_vol = spm_vol(strtrim(inputpath));
     smoothed_vol = spm_vol(inputpath);
     smoothed_vol2 = spm_smoothto8bit(smoothed_vol, 20);
     % Y = spm_read_vols(smoothed_vol2);  % direct access to the data matrix
     % imagesc(Y(:,:,20))  % show a slice
-    template_vol = spm_vol(strtrim('C:\git\auto_acpc_reorient\T1_template_CAT12_rm_withskull.nii'));
+    template_vol = spm_vol(strtrim('T1_template_CAT12_rm_withskull.nii'));
+
+    % Manual/Pre coregistration (without using SPM)
+    if precoreg
+        fprintf('Pre-coregistration by translation of centroid, please wait...\n');
+        % Find the center of mass
+        input_centroid = [get_centroid(input_vol) 1];  % add a unit factor to be able to add the translation of the world-to-voxel mapping in the nifti headers, see: https://www.youtube.com/watch?v=UvevHXITVG4
+        template_centroid = [get_centroid(template_vol) 1];
+        input_centroid_voxel = (input_vol.mat * input_centroid')';  % convert to voxel space by applying the nifti header transform
+        template_centroid_voxel = (template_vol.mat * template_centroid')';
+        % Calculate the euclidian distance = translation transform from the input to the template centroid
+        i2t_dist = template_centroid_voxel - input_centroid_voxel;
+        % Apply the translation on the nifti header world-to-voxel transform
+        M = input_vol.mat;
+        M(:,4) = M(:,4) + i2t_dist';
+        % Save into the original file
+        spm_get_space(inputpath, M);
+        %spm_get_space([inputpath(1:end-4) '-centroid.nii'], M);  % debug line, save the same transform on the image where the centroid is made visible
+        % Apply the new mapping in the already loaded images including smoothed (this avoids the need to reload the input volume and resmooth it)
+        input_vol.mat = M;
+        smoothed_vol.mat = M;
+        smoothed_vol2.mat = M;
+        fprintf('Pre-coregistration done!\n');
+    end
+
+    % Affine coregistration (with translation)
     if strcmp(mode, 'affine')
         fprintf('Affine reorientation\n');
         if exist('flags_affine', 'var') && ~isempty(flags_affine)
@@ -239,14 +267,21 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
         %spm_get_space(inputpath, M*input_vol.mat);
         spm_get_space(inputpath, M*input_vol.mat);
     else
-        fprintf('Mutual information reorientation\n');
+        % Joint Histogram coregistration
+        % Keep in mind only rotations can be done, which excludes reflections (that's good), but also rescaling, including isotropic rescaling (that's bad), so we need another step (such as affine reorientation) before to be able to rescale as necessary, and also translate (although this coregistration is invariant to translations, if you try to coregister manually after or do between-subjects coregistration this will be an issue)
+        fprintf('Joint Histogram (mutual information) reorientation\n');
         flags = struct('sep', 5);
+        flags.cost_fun = 'ecc';  % ncc works remarkably well, when it works, else it fails very badly... Also ncc should only be used for within-modality coregistration (TODO: test if for reorientation it works well, even on very damaged/artefacted brains?)
+        flags.tol = [0.02, 0.02, 0.02, 0.001, 0.001, 0.001, 0.01, 0.01, 0.01, 0.001, 0.001, 0.001];  % VERY important to get good results, these are defaults from the GUI
         % spm_coreg can only find a rigid-body rotation, but pre-translation is not necessary for spm_coreg to work because it's working directly on joint histograms, so empty space is meaningless. Also there is no need to do a QR decomposition here since it's rigid-body.
         % however if later we want to coregister another modality (eg, functional) over the structural, we need to fix the translation too. In this case, spm_affreg is necessary for translation and (isotropic) scaling first on the structural.
         x = spm_coreg(template_vol, smoothed_vol2, flags);
-        M = inv(spm_matrix(x));
+        % Convert the transform parameters into a 3D affine transform matrix (but it's only rigid-body)
+        M = spm_matrix(x);
         % Apply the reorientation and save back the new coordinations
-        spm_get_space(inputpath, M*spm_get_space(inputpath));
+        % also apply an inversion to project into the input volume space (instead of template space)
+        spm_get_space(inputpath, pinv(M)*spm_get_space(inputpath));  % input_vol.mat == spm_get_space(inputpath)
+        % alternative to : M \ input_vol.mat
     end %endif
     fprintf('Autoreorientation done!\n');
 end %endfunction
@@ -277,6 +312,7 @@ end %endfunction
 
 function R = remove_reflections(R)
 % Fix reflections in scale matrix R, generated from the QR decomposition or manually constructed with spm_imatrix (they are stored on the main diagonal as negative scaling factors)
+% This is based on Clifford's geometric algebra, which shows that 2 successive reflections in two planes equal one rotation (as it equals to a point-wise reflection): Baylis, William. (2004). Applications of Clifford Algebras in Physics. 10.1007/978-0-8176-8190-6_4. https://www.researchgate.net/figure/Successive-reflections-in-two-planes-is-equivalent-to-a-rotation-by-twice-the-dihedral_fig2_228772873
     if isodd(sum(sign(diag(R)) == -1))  % if the number of reflections is even, it's ok, every 2 reflections is equal to a rotation: https://en.wikipedia.org/wiki/Rotations_and_reflections_in_two_dimensions
         % Else, there's an odd number of reflections, we need to fix it by adding or removing one reflection to make it an even number
         reflections = (sign(diag(R)) == -1);
@@ -342,6 +378,58 @@ function debug_from_proper_rotation_to_improper_and_back(Q, R)
     assert(all(Q3 == Q, [1 2]));
     assert(all(R3 == R, [1 2]));
 end
+
+function wcentroid1 = get_centroid(svol, binarize, invert, debug)
+% wcentroid1 = get_centroid(svol, binarize, invert)
+% From an spm volume (use spm_vol()), returns the center of mass (if non binarized, else the centroid/geometric mean)
+% Note that if the whole head is acquired (including the neck), then if non binarized, the centroid will have a tendency to lean towards the neck, which we don't necessarily want
+% Invert allows to work on images where the brain tissue is in black and the background white
+
+    % Optional arguments
+    if ~exist('binarize', 'var')
+        binarize = true;
+    end
+    if ~exist('invert', 'var')
+        invert = false;
+    end
+    if ~exist('debug', 'var')
+        debug = false;
+    end
+
+    % Access the data in the body of the nifti volume
+    input_data = spm_read_vols(svol);
+
+    % Invert image if necessary beforehand (because we expect for the calculations to work that the background to be 0 and only the forefront object to have a higher intensity)
+    if invert
+        % Calculate the complement of the image (ie, invert the image)
+        input_data = input_data + min(input_data, [], 'all');  % first we shift any negative value to be null
+        input_data = max(input_data, [], 'all') - input_data;  % then we invert
+    end
+
+    % 0- threshold data first, so that the background is not used to weight
+    bak_thresh = mean(input_data, 'all'); %median(input_data, 'all');  % use mean instead of median, because we don't need to keep the whole brain, we just want to kick out the background and keep what is most likely the brain
+    input_data(input_data <= bak_thresh) = 0;
+    if binarize
+        input_data(input_data > bak_thresh) = 1;
+    end %endif
+    % 1- extract the coordinates of each voxel and its associated value, each in a different vector (we can combine into a long-form table later)
+    idx1 = find(input_data);  % extract linear/vector style indices
+    v1 = input_data(idx1);  % extract values in a vector
+    [x1, y1, z1] = ind2sub(size(input_data), find(input_data));  % convert linear indices to 3D indices/coordinates
+    % 2- calculate the weighted sum = center of mass in each dimension
+    wcentroid1 = (v1'*[x1 y1 z1])./sum(v1);  % weighted centroid
+    %wcentroid1 = sum([x1 y1 z1], 1) ./ size([x1 y1 z1], 1);  % non weighted (binarized) centroid. If image is binarized before, the weighted centroid and non-weighted centroid should be the same.
+
+    % Debug test: paint a square around the centroid and save the new nifti image just to see where it is
+    if debug
+        disp(wcentroid1);
+        rwcentroid1 = round(wcentroid1);
+        input_data(rwcentroid1(1)-20:rwcentroid1(1)+20, rwcentroid1(2)-20:rwcentroid1(2)+20, rwcentroid1(3)-20:rwcentroid1(3)+20) = 0; % max(input_data, [], 'all', 'omitnan');
+        V3 = svol;
+        V3.fname = [svol.fname(1:end-4) '-centroid.nii'];
+        spm_write_vol(V3, input_data);
+    end %endif
+end  %endfunction
 
 %%% Additional resources
 % infinite dimentional qr decomposition: https://link.springer.com/article/10.1007/s00211-019-01047-5
