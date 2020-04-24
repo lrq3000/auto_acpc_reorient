@@ -349,6 +349,7 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
         % also apply an inversion to project into the input volume space (instead of template space)
         spm_get_space(inputpath, pinv(M)*spm_get_space(inputpath));  % input_vol.mat == spm_get_space(inputpath)
         % alternative to : M \ input_vol.mat
+        % TODO: to enhance performance, first do a spm_coreg using a binarized input image (ie, a brain mask), using the mean as is done for the centroids calculation? Just to ensure to have a good starting point for orientation.
     end %endif
     fprintf('Autoreorientation done!\n');
 end %endfunction
@@ -569,5 +570,5 @@ end  %endfunction
 % BEST: and Least-Squares Rigid Motion Using SVD, by Olga Sorkine-Hornung and Michael Rabinovich, 2017 - in particular the entry: "Orientation rectification"
 % SPM's normalize function uses the origin as a starting estimate, according to Chris Rorden: https://github.com/rordenlab/spmScripts/blob/master/nii_setOrigin.m - BTW it reuses the coregistration parameters from K.Nemoto https://web.archive.org/web/20180727093129/http://www.nemotos.net/scripts/acpc_coreg.m
 
-% best results, rotation-only and no rescaling: autoreorient('t1.nii', 'mi', [], false, false, 'none', true, [], true)
-% good result but not exactly on AC-PC: best results: autoreorient('t1.nii', 'mi', [], false, false, 'none', true, 'raw', true)
+% best results, rotation-only and no rescaling, retaining voxel-to-world mapping: autoreorient('t1.nii', 'mi', [], false, false, 'none', false, 'raw', true)
+% works awesomely for hard cases even with a hard sheared input image, but losing voxel-to-world mapping: autoreorient('t1.nii', 'mi', [], false, false, 'none', false, 'raw_scale', true)
