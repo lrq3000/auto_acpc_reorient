@@ -1,7 +1,8 @@
 function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, affdecomposition, precoreg, precoreg_reset_orientation, debug)
 % DEVELOPMENT FUNCTION
-% This function is kept as a minified version of the core routine to do autoreorientation using SPM12 functions. This is kept for development purposes (to quickly debug out only the core routines), do not use it for production.
+% This function is kept as a barebone version of the core routines to do autoreorientation using SPM12 functions. This is kept for development purposes (to quickly debug out only the core routines), do not use it for production.
 % affdecomposition defines the decomposition done to ensure structure is maintained (ie, no reflection nor shearing). Can be: qr (default), svd (deprecated), imatrix or none. Only the qr decomposition ensures the structure is maintained.
+% precoreg_reset_orientation: before coregistration, reset to scanner orientation? Value can be: 'raw' (equals to 'scanner', to be in scanner original orientation), 'raw_scale' (scanner original orientation + reset scaling information, warning: may lose the voxel-to-world mapping and hence the real size of voxels - but sometimes that's necessary if the image scaling is too messed up) or 'mat0' (previous orientation matrix) or false
 
     if ~exist('noshearing', 'var')
         noshearing = true;
@@ -19,8 +20,6 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
         debug = false;
     end
     if ~exist('precoreg_reset_orientation', 'var')
-        % before coregistration, reset to scanner orientation?
-        % value can be: 'raw' or 'scanner' (equals to 'mat0') or false
         precoreg_reset_orientation = false;
     end
 
@@ -28,19 +27,46 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
     input_vol = spm_vol(strtrim(inputpath));
     template_vol = spm_vol(strtrim('T1_template_CAT12_rm_withskull.nii'));
 
+    % Sanity checks on input image
+    iM = spm_imatrix(input_vol.mat);
+    %iM_orig = spm_imatrix(input_vol.private.mat0);  % NOT reliable: svol.private.mat0 is simply the previously saved orientation matrix, not necessarily the original one
+    if (sum(abs(iM(10:12))) > 1E-5)
+        fprintf('Warning: Shearing detected in input image, this can be fixed by setting precoreg_reset_orientation = "scanner".\n');
+    end
+    if (sum(abs(iM(7:9))) > 1E-5)  % alternative: calculate the QR decomposition
+        fprintf('Warning: Anisotropic scaling detected in input image, this can be fixed by setting precoreg_reset_orientation = "scanner".\n');
+    end
+    [Q, R] = qr(input_vol.mat(1:3,1:3));
+    Z = sign(diag(R)) .* abs(diag(R));
+    if ((single(det(Q)) == -1.0) || (any(sign(Z) == -1, 'all') && isodd(sum(sign(Z) == -1))))
+        fprintf('Warning: Reflections detected in input image (i.e., the orientation is not preserved from the original orientation, so the left side of the brain _may_ be inversed with the right side!), this can be fixed by setting precoreg_reset_orientation = "scanner".\n');  % note that some scanner (such as Siemens) may set a reflection in the initial orientation matrix they set, without impacting the left-right orientation (ie, the reflection is in another dimension)
+    end
+
+    % Reset orientation?
     if precoreg_reset_orientation ~= false
-        if strcmp(precoreg_reset_orientation, 'raw')
+        if strcmp(precoreg_reset_orientation, 'raw') || strcmp(precoreg_reset_orientation, 'scanner')
             fprintf('Reset orientation to raw\n');
             % raw original voxel space with no orientation
             % get voxel size
+            % NOT reliable, this may have been manipulated. Unfortunately, we then have no way to get back the original dimensions...
             vox = sqrt(sum(input_vol.mat(1:3, 1:3).^2));
             % build resetted matrix basis, based simply on the voxel scaling, but reset the whole orientation (ie, everything else is 0 apart from the main diagonal)
             M = diag([vox 1]);
             % calculate centroid, set the origin on it and save back the orientation matrix (including new origin on centroid) in the volume and the file
-            set_origin_to_centroid_and_save(input_vol, M, debug);
-        elseif strcmp(precoreg_reset_orientation, 'scanner') || strcmp(precoreg_reset_orientation, 'mat0')
-            fprintf('Reset orientation to scanner original orientation\n');
-            % original orientation set by the scanner
+            M = set_origin_to_centroid_and_save(input_vol, M, debug);
+            % update input volume in-memory
+            input_vol.mat = M;
+        elseif strcmp(precoreg_reset_orientation, 'raw_scale')
+            fprintf('Reset orientation and scale/voxel-size to raw\n');
+            % Reset with a blank orientation matrix, including dimensions
+            M = eye(4,4);
+            % calculate centroid, set the origin on it and save back the orientation matrix (including new origin on centroid) in the volume and the file
+            M = set_origin_to_centroid_and_save(input_vol, M, debug);
+            % update input volume in-memory
+            input_vol.mat = M;
+        elseif strcmp(precoreg_reset_orientation, 'mat0')
+            fprintf('Reset orientation to previous orientation\n');
+            % reuse previously saved orientation matrix
             % simply reload mat0 and overwrite the current orientation matrix
             input_vol.mat = input_vol.private.mat0;
             spm_get_space(inputpath, input_vol.mat);
@@ -270,7 +296,7 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
                 [T, R, Z, S] = iM2{:};
                 % Fix spm_imatrix inappropriate calculation of the reflections (only the first dimension is ever set to be a reflection, whether or not the reflection happens on this plane or another)
                 [~, B] = qr(M(1:3,1:3));
-                Z = sign(diag(B))' .* abs(Z);
+                Z = sign(diag(B))' .* abs(diag(Z));  % extract the rescaling factor signs from the QR decomposition - TODO: depending on the QR algorithm, some of the reflections may be in Q, so we should also check Q
                 % Nullify shearing if option is enabled
                 if noshearing
                     S = zeros(1, 3);
@@ -303,7 +329,9 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
         % Apply the reorientation on the input image header and save back the new coordinations in the original input file
         spm_get_space(inputpath, M*input_vol.mat);
         % spm_affreg does not set the origin, so we do it manually on the centroid/center of mass (but it's strongly advised to call spm_coreg() after spm_affreg instead, as spm_coreg() will also match and project the template's origin onto the input volume's origin
-        set_origin_to_centroid_and_save(input_vol, M*input_vol.mat, debug);
+        M = set_origin_to_centroid_and_save(input_vol, M*input_vol.mat, debug);
+        % update input volume in-memory
+        input_vol.mat = M;
     else
         % Joint Histogram coregistration
         % Keep in mind only rotations can be done, which excludes reflections (that's good), but also rescaling, including isotropic rescaling (that's bad), so we need another step (such as affine reorientation) before to be able to rescale as necessary, and also translate (although this coregistration is invariant to translations, if you try to coregister manually after or do between-subjects coregistration this will be an issue)
@@ -499,10 +527,10 @@ function M = set_origin(M, orig, absolutecoord)
     M(1:3,4) = M(1:3,4) - orig(1:3);  % set the origin onto the centroid
 end  % endfunction
 
-function set_origin_to_centroid_and_save(svol, M, debug);
+function M = set_origin_to_centroid_and_save(svol, M, debug);
 % set_origin_to_centroid_and_save(svol, M)
 % calculate centroid, set the origin on it relatively to the provided orientation matrix M (can be svol.mat), and save back the orientation matrix (including new origin on centroid) in the volume and the file
-% Returns nothing (modifies svol directly)
+% Returns nothing (saves to file svol.fname directly) - note you should probably also update svol.mat in-memory using the returned M
 
     if ~exist('debug', 'var')
         debug = false;
@@ -515,7 +543,6 @@ function set_origin_to_centroid_and_save(svol, M, debug);
     % save back to the file and update the volume
     spm_get_space(svol.fname, M);
     if debug, spm_get_space([svol.fname(1:end-4) '-centroid.nii'], M); end;
-    input_vol.mat = M;
 end  %endfunction
 
 %%% Additional resources
@@ -542,5 +569,5 @@ end  %endfunction
 % BEST: and Least-Squares Rigid Motion Using SVD, by Olga Sorkine-Hornung and Michael Rabinovich, 2017 - in particular the entry: "Orientation rectification"
 % SPM's normalize function uses the origin as a starting estimate, according to Chris Rorden: https://github.com/rordenlab/spmScripts/blob/master/nii_setOrigin.m - BTW it reuses the coregistration parameters from K.Nemoto https://web.archive.org/web/20180727093129/http://www.nemotos.net/scripts/acpc_coreg.m
 
-% best results, rotation-only and no rescaling: autoreorient('t1.nii', 'mi', [], false, false, 'none', true, 'scanner', true)
+% best results, rotation-only and no rescaling: autoreorient('t1.nii', 'mi', [], false, false, 'none', true, [], true)
 % good result but not exactly on AC-PC: best results: autoreorient('t1.nii', 'mi', [], false, false, 'none', true, 'raw', true)
