@@ -34,15 +34,10 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
             % raw original voxel space with no orientation
             % get voxel size
             vox = sqrt(sum(input_vol.mat(1:3, 1:3).^2));
-            % build resetted matrix basis, based simply on the voxel scaling, but reset the whole orientation
+            % build resetted matrix basis, based simply on the voxel scaling, but reset the whole orientation (ie, everything else is 0 apart from the main diagonal)
             M = diag([vox 1]);
-            % calculate centroid, will be the origin (this is invariant to the orientation matrix M)
-            orig = get_centroid(input_vol, true, false, debug);
-            % set origin to centroid
-            M = set_origin(M, orig);
-            % save back to the file and update the volume
-            spm_get_space(input_vol.fname, M);
-            input_vol.mat = M;
+            % calculate centroid, set the origin on it and save back the orientation matrix (including new origin on centroid) in the volume and the file
+            set_origin_to_centroid_and_save(input_vol, M, debug);
         elseif strcmp(precoreg_reset_orientation, 'scanner') || strcmp(precoreg_reset_orientation, 'mat0')
             fprintf('Reset orientation to scanner original orientation\n');
             % original orientation set by the scanner
@@ -306,9 +301,9 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
             assert(sum(S) < 0.000001);
         end
         % Apply the reorientation on the input image header and save back the new coordinations in the original input file
-        % Some inspiration by BSD-2 licensed: https://github.com/jimmyshen007/NeMo/blob/c7cc775e7fc84f84255b0d3fa474b7f955e817f5/mymfiles/eve_tools/Structural_Connectivity/approx_coreg2MNI.m - licensed under BSD-2-Clause (compatible with MIT license anyway)
-        %spm_get_space(inputpath, M*input_vol.mat);
         spm_get_space(inputpath, M*input_vol.mat);
+        % spm_affreg does not set the origin, so we do it manually on the centroid/center of mass (but it's strongly advised to call spm_coreg() after spm_affreg instead, as spm_coreg() will also match and project the template's origin onto the input volume's origin
+        set_origin_to_centroid_and_save(input_vol, M*input_vol.mat, debug);
     else
         % Joint Histogram coregistration
         % Keep in mind only rotations can be done, which excludes reflections (that's good), but also rescaling, including isotropic rescaling (that's bad), so we need another step (such as affine reorientation) before to be able to rescale as necessary, and also translate (although this coregistration is invariant to translations, if you try to coregister manually after or do between-subjects coregistration this will be an issue)
@@ -504,7 +499,28 @@ function M = set_origin(M, orig, absolutecoord)
     M(1:3,4) = M(1:3,4) - orig(1:3);  % set the origin onto the centroid
 end  % endfunction
 
+function set_origin_to_centroid_and_save(svol, M, debug);
+% set_origin_to_centroid_and_save(svol, M)
+% calculate centroid, set the origin on it relatively to the provided orientation matrix M (can be svol.mat), and save back the orientation matrix (including new origin on centroid) in the volume and the file
+% Returns nothing (modifies svol directly)
+
+    if ~exist('debug', 'var')
+        debug = false;
+    end
+
+    % calculate centroid, will be the origin (this is invariant to the orientation matrix M)
+    orig = get_centroid(svol, true, false, debug);
+    % set origin to centroid
+    M = set_origin(M, orig);
+    % save back to the file and update the volume
+    spm_get_space(svol.fname, M);
+    if debug, spm_get_space([svol.fname(1:end-4) '-centroid.nii'], M); end;
+    input_vol.mat = M;
+end  %endfunction
+
 %%% Additional resources
+% spm_get_space usage found in this BSD-2 licensed script? Can't remember https://github.com/jimmyshen007/NeMo/blob/c7cc775e7fc84f84255b0d3fa474b7f955e817f5/mymfiles/eve_tools/Structural_Connectivity/approx_coreg2MNI.m
+
 % infinite dimentional qr decomposition: https://link.springer.com/article/10.1007/s00211-019-01047-5
 % history of QR decomposition: https://www.math.unipd.it/~alvise/AN_2016/LETTURE/QR_50_years_later.pdf
 % https://www.math.uci.edu/~chenlong/RNLA/LSQRSVD.pdf
@@ -526,5 +542,5 @@ end  % endfunction
 % BEST: and Least-Squares Rigid Motion Using SVD, by Olga Sorkine-Hornung and Michael Rabinovich, 2017 - in particular the entry: "Orientation rectification"
 % SPM's normalize function uses the origin as a starting estimate, according to Chris Rorden: https://github.com/rordenlab/spmScripts/blob/master/nii_setOrigin.m - BTW it reuses the coregistration parameters from K.Nemoto https://web.archive.org/web/20180727093129/http://www.nemotos.net/scripts/acpc_coreg.m
 
-% best results: autoreorient('t1.nii', 'mi', [], false, false, 'none', true, 'scanner', true)
+% best results, rotation-only and no rescaling: autoreorient('t1.nii', 'mi', [], false, false, 'none', true, 'scanner', true)
 % good result but not exactly on AC-PC: best results: autoreorient('t1.nii', 'mi', [], false, false, 'none', true, 'raw', true)
