@@ -30,23 +30,27 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
 
     if precoreg_reset_orientation ~= false
         if strcmp(precoreg_reset_orientation, 'raw')
+            fprintf('Reset orientation to raw\n');
             % raw original voxel space with no orientation
             % get voxel size
             vox = sqrt(sum(input_vol.mat(1:3, 1:3).^2));
             % build resetted matrix basis, based simply on the voxel scaling, but reset the whole orientation
             M = diag([vox 1]);
-            % get centroid, we will set the origin on it (ie, the translation part of the M orientation matrix)
-            input_centroid = get_centroid(input_vol, true, false, debug);
-            M(1:3,4) = (-vox .* input_centroid(1:3))';
-            % save back into the file
-            spm_get_space(inputpath, M);
+            % calculate centroid, will be the origin (this is invariant to the orientation matrix M)
+            orig = get_centroid(input_vol, true, false, debug);
+            % set origin to centroid
+            M = set_origin(M, orig);
+            % save back to the file and update the volume
+            spm_get_space(input_vol.fname, M);
             input_vol.mat = M;
         elseif strcmp(precoreg_reset_orientation, 'scanner') || strcmp(precoreg_reset_orientation, 'mat0')
+            fprintf('Reset orientation to scanner original orientation\n');
             % original orientation set by the scanner
             % simply reload mat0 and overwrite the current orientation matrix
             input_vol.mat = input_vol.private.mat0;
             spm_get_space(inputpath, input_vol.mat);
         end
+        fprintf('Reset orientation done!\n');
     end
 
     % Smooth input image, helps a lot with the coregistration (which is inherently noisy since there is no perfect match)
@@ -57,24 +61,22 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
 
     % Manual/Pre coregistration (without using SPM)
     if precoreg
-        fprintf('Pre-coregistration by translation of centroid, please wait...\n');
+        fprintf('Pre-coregistration by translation of centroid (resetting origin), please wait...\n');
         % Find the center of mass
         input_centroid = [get_centroid(input_vol, true, false, debug) 1];  % add a unit factor to be able to add the translation of the world-to-voxel mapping in the nifti headers, see: https://www.youtube.com/watch?v=UvevHXITVG4
-        template_centroid = [get_centroid(template_vol, true, false, debug) 1];
-        input_centroid_voxel = (input_vol.mat * input_centroid')';  % convert from raw/scanner voxel space to current orientation voxel space (ie, this represents the distance in voxels from the current origin to the centroid, in other words this is the centroid position relative to the currently set origin)
-        template_centroid_voxel = (template_vol.mat * template_centroid')';
+        %template_centroid = [get_centroid(template_vol, true, false, debug) 1];
+        %input_centroid_voxel = (input_vol.mat * input_centroid')';  % convert from raw/scanner voxel space to current orientation voxel space (ie, this represents the distance in voxels from the current origin to the centroid, in other words this is the centroid position relative to the currently set origin)
+        %template_centroid_voxel = (template_vol.mat * template_centroid')';
         % Calculate the euclidian distance = translation transform from the input to the template centroid, we also resize to match the input volume's space (which may be bigger or smaller - if bigger, then we need to reduce the number of voxels we move)
-        i2t_dist = (template_centroid_voxel(1:3) - input_centroid_voxel(1:3)) .* (template_vol.dim ./ input_vol.dim);
+        %i2t_dist = (template_centroid_voxel(1:3) - input_centroid_voxel(1:3)) .* (template_vol.dim ./ input_vol.dim);
+
         % Apply the translation on the nifti header voxel-to-world transform
-        % This effectively resets the origin onto the centroid (nifti viewers such as MRIcron or SPM will apply the transform in a vol.premul matrix before the rest)
-        M = input_vol.mat;
-        M(1:3,4) = M(1:3,4) - input_centroid_voxel(1:3)';  % set the origin onto the centroid
+        M = set_origin(input_vol.mat, input_centroid, true);
         %M(1:3,4) = M(1:3,4) + i2t_dist(1:3)';  % shift some more to match where the origin is in the template compared to its own centroid. Not sure this step is necessary since anyway we certainly won't end up in the AC-PC, but well why not, it may bridge some more the relative distance between the template origin and input volume origin. DEPRECATED: unreliable, it's preferable to stick to the centroid
         % Note: at this point, we should also set the template's origin on its centroid to leave only the rotation and scale to be estimated afterwards. But since we provide a template with the origin on the AC-PC, it's an even better origin, so we skip this step here. If the template did not have the origin on AC-PC, then setting the origin on its centroid would be a good thing to do, see: http://nghiaho.com/?page_id=671.
         % Save into the original file
         spm_get_space(inputpath, M);
-        if debug, spm_get_space([inputpath(1:end-4) '-centroid.nii'], M); end;
-        %spm_get_space([inputpath(1:end-4) '-centroid.nii'], M);  % debug line, save the same transform on the image where the centroid is made visible
+        if debug, spm_get_space([inputpath(1:end-4) '-centroid.nii'], M); end;  % debug line, save the same transform on the image where the centroid is made visible
         % Apply the new mapping in the already loaded images including smoothed (this avoids the need to reload the input volume and resmooth it)
         input_vol.mat = M;
         smoothed_vol.mat = M;
@@ -424,6 +426,7 @@ end
 function wcentroid1 = get_centroid(svol, binarize, invert, debug)
 % wcentroid1 = get_centroid(svol, binarize, invert)
 % From an spm volume (use spm_vol()), returns the center of mass (if non binarized, else the centroid/geometric mean)
+% This is invariant from the current orientation matrix M, as we are working directly on the voxels intensities and coordinates
 % Note that if the whole head is acquired (including the neck), then if non binarized, the centroid will have a tendency to lean towards the neck, which we don't necessarily want
 % Invert allows to work on images where the brain tissue is in black and the background white
 
@@ -472,6 +475,34 @@ function wcentroid1 = get_centroid(svol, binarize, invert, debug)
         spm_write_vol(V3, input_data);
     end %endif
 end  %endfunction
+
+function M = set_origin(M, orig, absolutecoord)
+% M = set_origin(M, orig, absolutecoord)
+% Sets the origin to the coordinates orig and save into svol file.
+% if absolutecoord is true (default), the orig coordinate is taken to be in the raw scanner space (before applying the orientation matrix M or svol.mat), hence some additional calculations are done. If the orig coordinates are already relative to the current origin (and hence orientation matrix M), set absolutecoord to false.
+% Return M, so that the volume can be updated in-memory using svol.mat = M; or saved back into a file using spm_get_space(svol.fname, M);
+
+    if ~exist('absolutecoord', 'var')
+        absolutecoord = true;
+    end
+
+    % make it a column vector in any case
+    orig = orig(:);
+
+    % add a unit factor to be able to add the translation of the world-to-voxel mapping in the nifti headers, see: https://www.youtube.com/watch?v=UvevHXITVG4
+    if numel(orig) == 3
+        orig = [orig; 1];
+    end
+
+    % convert from raw/scanner voxel space to current orientation voxel space (ie, this represents the distance in voxels from the current origin to the centroid, in other words this is the centroid position relative to the currently set origin - this also includes rescaling of voxels from the main diagonal values, and rotation and shearing)
+    if absolutecoord
+        orig = M * orig;  % should be a column vector (in and out)
+    end
+
+    % Resets the origin onto the centroid, by translating the previous origin to the new one
+    % (nifti viewers such as MRIcron or SPM will apply the transform in a vol.premul matrix before the rest)
+    M(1:3,4) = M(1:3,4) - orig(1:3);  % set the origin onto the centroid
+end  % endfunction
 
 %%% Additional resources
 % infinite dimentional qr decomposition: https://link.springer.com/article/10.1007/s00211-019-01047-5
