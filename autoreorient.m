@@ -2,7 +2,7 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
 % DEVELOPMENT FUNCTION
 % This function is kept as a barebone version of the core routines to do autoreorientation using SPM12 functions. This is kept for development purposes (to quickly debug out only the core routines), do not use it for production.
 % affdecomposition defines the decomposition done to ensure structure is maintained (ie, no reflection nor shearing). Can be: qr (default), svd (deprecated), imatrix or none. Only the qr decomposition ensures the structure is maintained.
-% precoreg_reset_orientation: before coregistration, reset to scanner orientation? Value can be: 'raw' (equals to 'scanner', to be in scanner original orientation), 'raw_scale' (scanner original orientation + reset scaling information, warning: may lose the voxel-to-world mapping and hence the real size of voxels - but sometimes that's necessary if the image scaling is too messed up) or 'mat0' (previous orientation matrix) or false
+% precoreg_reset_orientation: before coregistration, reset orientation? Value can be: true (null orientation but keep scale/voxel-size), a vector of 3 values (null orientation and reset scale/voxel-size with the provided vector - this is the only way to reset the voxel-size, as the nifti format does NOT store the scanner's original orientation nor voxel-size/dimension, so the user must provide a vector of voxel-size from eg the MRI machine printout of sequences parameters) or 'mat0' (previous orientation matrix if available) or false (to disable)
 
     if ~exist('noshearing', 'var')
         noshearing = true;
@@ -44,8 +44,15 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
 
     % Reset orientation?
     if precoreg_reset_orientation ~= false
-        if strcmp(precoreg_reset_orientation, 'raw') || strcmp(precoreg_reset_orientation, 'scanner')
-            fprintf('Reset orientation to raw\n');
+        % Important note: there is NO way to recover the original dimensions and orientation, as the initial orientation matrix or quaternions are not saved but replaced by newer values. So if this was tampered, the user need to manually specify the original dimension (eg, by using values such as the voxel size in the printout of the sequence parameters from the MRI machine).
+        % For more infos, see:
+        % Tuto on nifti orientations systems: http://www.grahamwideman.com/gw/brain/orientation/orientterms.htm
+        % http://www.grahamwideman.com/gw/brain/tools/gworc/index.htm
+        % Tuto on original rationale behind orientation and specification in nifti format: https://nifti.nimh.nih.gov/dfwg/presentations/nifti-1-rationale
+        % Test with MRIcron by unchecking "Reorient image before loading" option in the preferences, this will load the raw image with an identity matrix. If you have an anisotropic image (eg, bold, dti), without reorientation you will see the image will be anisotropic, showing there is no way to infer what was the original voxel-size if the orientation matrix is not used.
+        % info = niftiinfo('t1.nii'); info.Transform.T' shows the orientation matrix (alternative to SPM).
+        if precoreg_reset_orientation == true
+            fprintf('Reset orientation but keep scale/voxel-size\n');
             % raw original voxel space with no orientation
             % get voxel size
             % NOT reliable, this may have been manipulated. Unfortunately, we then have no way to get back the original dimensions...
@@ -56,10 +63,11 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
             M = set_origin_to_centroid_and_save(input_vol, M, debug);
             % update input volume in-memory
             input_vol.mat = M;
-        elseif strcmp(precoreg_reset_orientation, 'raw_scale')
-            fprintf('Reset orientation and scale/voxel-size to raw\n');
-            % Reset with a blank orientation matrix, including dimensions
-            M = eye(4,4);
+        elseif isvector(precoreg_reset_orientation) && (numel(precoreg_reset_orientation) == 3)
+            fprintf('Reset orientation and scale/voxel-size to the specified vector:\n');
+            disp(precoreg_reset_orientation);
+            % Reset with a blank orientation matrix but with the scale factors as provided by user
+            M = diag([precoreg_reset_orientation(:); 1]);
             % calculate centroid, set the origin on it and save back the orientation matrix (including new origin on centroid) in the volume and the file
             M = set_origin_to_centroid_and_save(input_vol, M, debug);
             % update input volume in-memory
@@ -381,6 +389,16 @@ end %endfunction
 function R = remove_reflections(R)
 % Fix reflections in scale matrix R, generated from the QR decomposition or manually constructed with spm_imatrix (they are stored on the main diagonal as negative scaling factors)
 % This is based on Clifford's geometric algebra, which shows that 2 successive reflections in two planes equal one rotation (as it equals to a point-wise reflection): Baylis, William. (2004). Applications of Clifford Algebras in Physics. 10.1007/978-0-8176-8190-6_4. https://www.researchgate.net/figure/Successive-reflections-in-two-planes-is-equivalent-to-a-rotation-by-twice-the-dihedral_fig2_228772873
+% The method used here is to decompose a rotation matrix to find in which dimensions are the negative scaling factors and balance the number of negative factors to always be even.
+%
+% Note that there is a theoretically simpler and equivalent alternative, to simply calculate R = V*diag([1 1 1 det(V*U')])*U';
+% References for this simpler method:
+% * Sorkine-Hornung, O., & Rabinovich, M. (2017). Least-squares rigid motion using svd. Computing, 1(1). https://igl.ethz.ch/projects/ARAP/svd_rot.pdf
+% * Eggert, D. W., Lorusso, A., & Fisher, R. B. (1997). Estimating 3-D rigid body transformations: a comparison of four major algorithms. Machine vision and applications, 9(5-6), 272-290. http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.173.2196&rep=rep1&type=pdf
+% * http://nghiaho.com/?page_id=671
+%
+% Either method is giving equivalent results. Note however that fixing reflections will only lead to an approximate orientation without reflection, it won't be exactly the same as with the reflection.
+
     if isodd(sum(sign(diag(R)) == -1))  % if the number of reflections is even, it's ok, every 2 reflections is equal to a rotation: https://en.wikipedia.org/wiki/Rotations_and_reflections_in_two_dimensions
         % Else, there's an odd number of reflections, we need to fix it by adding or removing one reflection to make it an even number
         reflections = (sign(diag(R)) == -1);
@@ -569,6 +587,8 @@ end  %endfunction
 % and An Approximate and Efficient Method for Optimal Rotation Alignment of 3D Models
 % BEST: and Least-Squares Rigid Motion Using SVD, by Olga Sorkine-Hornung and Michael Rabinovich, 2017 - in particular the entry: "Orientation rectification"
 % SPM's normalize function uses the origin as a starting estimate, according to Chris Rorden: https://github.com/rordenlab/spmScripts/blob/master/nii_setOrigin.m - BTW it reuses the coregistration parameters from K.Nemoto https://web.archive.org/web/20180727093129/http://www.nemotos.net/scripts/acpc_coreg.m
+
+% tosee https://github.com/jewettaij/superpose3d
 
 % best results, rotation-only and no rescaling, retaining voxel-to-world mapping: autoreorient('t1.nii', 'mi', [], false, false, 'none', false, 'raw', true)
 % works awesomely for hard cases even with a hard sheared input image, but losing voxel-to-world mapping: autoreorient('t1.nii', 'mi', [], false, false, 'none', false, 'raw_scale', true)
