@@ -82,6 +82,14 @@ This software was developed by Stephen Karl Larroque (Coma Science Group, GIGA-C
 
 The code of auto_acpc_reorient.m is a fork from [auto_reorient.m](https://www.jiscmail.ac.uk/cgi-bin/webadmin?A2=SPM;d1f675f1.0810) written by John Ashburner (FIL, UCL, London, UK) and Carlton Chu (FIL, UCL, London, UK). Unfortunately, the original code was not released under a version control system, so the history in this repository does not include the history of the original commits. The history is hence a bit muddy, so if there is any inaccuracies, please let us know, we will happily update it.
 
+## Frequently Asked Questions (FAQ)
+
+* Can this script be used to "pseudo-normalize" the brain without using the usual unified segmentation workflow?
+
+Theoretically, this should be possible by using a non-linear reorientation method, which is provided in SPM and in this script. A non-linear transform allows, on top of affine transforms, to apply independent resizing transforms in each of the 3 axes, hence allowing to resize the individual's brain to better match the template's and, supposedly, better match the brain areas.
+
+However, non-linear transforms have one major issue: they can flip/mirror the brain, when the value of resizing is negative. This happens only when an odd number of axes scaling factors are negative (ie, 1 or 3 scaling factors will lead to a flipping, whereas 2 will not). There is currently no failsafe mechanism in SPM to prevent this from happening (and it's actually a quite complex issue mathematically), but more problematically, SPM does not detect this. The new experimental version of this project will include an autodetection feature to warn the user when a flipping/mirroring happened, and will even include some failsafe mechanisms to try to prevent this issue (but at the expense of approximating the non-linear reorientation result).
+
 ## Similar projects
 
 We later found that K. Nemoto made a similar enhanced algorithm back in 2017, based on centering to the origin (instead of translating to match a template for us - what we call a pre-coregistration step) before applying the original auto_reorient.m script but tweaking it to apply a coregistration on a DARTEL template (instead of SPM12 ones in the original script, or a custom made template using CAT12 for this one). The resulting script, [acpc_coreg.m](https://web.archive.org/web/20180727093129/http://www.nemotos.net/scripts/acpc_coreg.m), can be found on [nemotos.net](https://www.nemotos.net/?p=1892).
