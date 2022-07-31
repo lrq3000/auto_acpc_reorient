@@ -3,7 +3,26 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
 % This function is kept as a barebone version of the core routines to do autoreorientation using SPM12 functions. This is kept for development purposes (to quickly debug out only the core routines), do not use it for production.
 % affdecomposition defines the decomposition done to ensure structure is maintained (ie, no reflection nor shearing). Can be: qr (default), svd (deprecated), imatrix or none. Only the qr decomposition ensures the structure is maintained.
 % precoreg_reset_orientation: before coregistration, reset orientation? Value can be: true (null orientation but keep scale/voxel-size), a vector of 3 values (null orientation and reset scale/voxel-size with the provided vector - this is the only way to reset the voxel-size, as the nifti format does NOT store the scanner's original orientation nor voxel-size/dimension, so the user must provide a vector of voxel-size from eg the MRI machine printout of sequences parameters) or 'mat0' (previous orientation matrix if available) or false (to disable)
+%
+% License: MIT License, except otherwise noted in comments around the code the other license pertains to.
+% Copyright (C) 2020 Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
+%
+% Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, includin without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+% The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+% THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+    % Addpath of the auxiliary library
+    if ~exist('auto_acpc_reorient_aux.m','file')
+        %restoredefaultpath;
+        addpath(genpath(strcat(cd(fileparts(mfilename('fullpath'))),'/auto_acpc_reorient_aux/')));
+    end
+
+    % Importing auxiliary functions
+    % this way of importing works with both MatLab and Octave
+    spmaux = auto_acpc_reorient_spmaux;  % Auxiliary functions to interface with SPM
+    aux = auto_acpc_reorient_aux;  % Our own auxiliary functions
+
+    % Default values
     if ~exist('noshearing', 'var')
         noshearing = true;
     end
@@ -87,6 +106,7 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
     smoothed_vol2 = spm_smoothto8bit(smoothed_vol, 20);
     % Y = spm_read_vols(smoothed_vol2);  % direct access to the data matrix
     % imagesc(Y(:,:,20))  % show a slice
+    keyboard
 
     % Manual/Pre coregistration (without using SPM)
     if precoreg
@@ -110,9 +130,9 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
         input_vol.mat = M;
         smoothed_vol.mat = M;
         smoothed_vol2.mat = M;
-        % SPM provides 3 ways to save nifti files:
+        % SPM provides 3 ways to save nifti files:
         % * spm_get_space(vol, transform) to only modify the world-to-voxel mapping headers (vol.mat)
-        % * spm_write_vol(vol, vol_data) where vol_data is a 3D matrix of the content of the nifti, and vol a nifti structure as accepted or created by spm using spm_read_vols().
+        % * spm_write_vol(vol, vol_data) where vol is a spm nifti structure as created by spm_vol(), and vol_data is a 3D matrix of the content of the nifti, and vol a nifti structure as accepted or created by spm using spm_read_vols().
         % * create(vol) where vol is a spm nifti structure as created by nifti(), and it will be saved in vol.fname path. This last option is the most complete, as it will save everything.
         %spm_write_vol(input_vol, input_vol.mat);
         fprintf('Pre-coregistration done!\n');
@@ -563,6 +583,500 @@ function M = set_origin_to_centroid_and_save(svol, M, debug);
     spm_get_space(svol.fname, M);
     if debug, spm_get_space([svol.fname(1:end-4) '-centroid.nii'], M); end;
 end  %endfunction
+
+function [best, bestfit, bestfitstd, bestpool, bestpoolfit] = mga_imatrix(genestart, popsize, demesize, fitnessfunc, recombinationrate, mutationrate, tournamentcount, multistart, randomstart, maxdim, randomgen, mutatefunc, truerandom, onlyrigid, debug)
+% [best, bestfit, bestfitstd] = mga_imatrix(genestart, popsize, demesize, fitnessfunc, recombinationrate, mutationrate, tournamentcount, multistart, randomstart, maxdim, randomgen, mutatefunc, debug)
+% From a spm_imatrix() vector, will find a better/locally optimal translation and orientation given the provided fitnessfunc by using the microbial genetic algorithm (MGA)
+% genestart is a vector of a single candidate that can be fed to fitnessfunc(genestart). This will both be used as the reference candidate (so we ensure we don't return a worse solution), and to generate new candidates. genestart should be a 12 elements vector as made by spm_imatrix(svol.mat), but don't forget that spm_coreg.optfun and spm_hist2 will apply it on top of input_vol.mat, such that orientation_that_will_be_tested = pinv(spm_matrix(genestart))*input_vol.mat -- in spm_coreg you can see the full call to spm_hist2 being: VF.mat\spm_matrix(x(:)')*VG.mat -- so by default you want genestart to be [0 0 0 0 0 0] (as is done in spm_coreg, which means we start from input_vol.mat as-is without any modification), NOT spm_imatrix(input_vol.mat) which would be a transform that would be applied ON TOP of input_vol.mat
+% maxdim is the maximum dimension to generate rotations when combined with randomstart = true. In general, set maxdim = svol.dim
+% popsize is the size of the population. This number should be relative to the number of tournamentcount, a good number is 1/10th of tournamentcount, as to allow all candidates to be explored and recombined by the end of the algorithm.
+% demesize is the size of the deme, which is the subpopulation size inside the ring that will be used to find a candidate B to compare candidate A. See Inman Harvey's paper. A good value is demesize = 0.1 to 0.3 * popsize.
+% fitnessfunc is the fitness function to use, it should accept a single variable x which will be a vector of the same size as genestart. Tip: try to optimize this function to be super fast, as although this genetic algorithm uses caching to try to save some time, a computation expensive fitnessfunc will limit the number of tournamentcount you can do (and hence the likelihood of converging to a satisficing solution). Specify fitnessfunc like this: fitnessfunc = @(x) jointhistogramfitness(spmaux, template_vol, input_vol, x);
+% recombination rate is the crossover rate, the probability that one loser's gene will be overwritten by the winner's.
+% mutation rate is the rate of randomly assigning a random value to one loser's gene.
+% tournamentcount is the number of rounds to find a winner and a loser candidates and update the loser's genes. A high value increases the likelihood of converging to a satisficing solution.
+% multistart is the number of independent rounds to relaunch the whole genetic algorithm, with a brand new population. A high value reduces the variance of the final result. This can be used to test the influence of different parameters values (ie, to hyper-optimize). Multistart allows to reduce variance since we restart from multiple starting points and travel different paths, but this does not help with converging to a better result, it's better to increase tournamentcount than multistartcount to improve performances. Increasing multistart is great to test different parameters (eg, recombinationrate or mutationrate) and see in one result whether the new parameter really improves the performance.
+% randomstart defines how the initial population is generated: false will generate a whole population as a copy of the input candidate genestart, true will keep genestart as the reference candidate but all other individuals will be randomly generated according to the randomgen function. If randomstart = true, randomgen needs to be a function accepting popsize as 1st argument and length of genestart as 2nd argument, and which generates popsize individuals to add in the pool. For example, if fitnessfunc = @(x)sum(x), randomgen can be @(popsize,numel_genestart)randi(10, popsize, numel_genestart)
+% randomgen is a function that defines how the initial population is randomly generated when randomstart == true. randomgen should expect 2 parameters: popsize and numel(genestart).
+% mutatefunc defines how the mutation is done (ie, how random values are calculated to be assigned to loser's genes).
+% truerandom defines whether the function is deterministic (false) or non-deterministic (true or a rand('seed') integer)
+% onlyrigid - if true (default), only rigid-body transforms will be generated (ie, translation and rotation). If false, scale and shearing will also be explored.
+%
+% Output: best is a imatrix with all the transform parameters as a 12 items vector (use spm_matrix(best) to transform to an orientation matrix), bestfit fitness score of the best candidate, bestfitstd the standard deviation over all multistart rounds (allows to assess performance variance by evaluating the variability of the current set of parameters)
+%
+% Example usage: [best, bestfit, bestfitstd] = autogen([1 2 3 4 5 6 7 8], 100, 10, @(x)sum(x), 0.7, 0.25, 1000, 1000, true, @(popsize,numel_genestart)randi(10, popsize, numel_genestart))
+% another example with a smaller number of tournament rounds and hence smaller population, with similar performances: [best, bestfit, bestfitstd] = autogen([1 2 3 4 5 6 7 8], 10, 3, @(x)sum(x), 0.7, 0.25, 100, 1000, true, @(popsize,numel_genestart)randi(10, popsize, numel_genestart))
+%
+% Tips: The 4 most important parameters to hyper-optimize for accuracy performance are: popsize, demesize, recombinationrate and mutationrate. Assess using (maximizing) bestfit and (minimize) bestfitstd with a high number of (>1000) multistart rounds, which would mean that the genetic algorithm with your parameters and fitnessfunc can reach a high score while having low variance. Also, increasing tournamentcount of course allows the algorithm to converge to a better solution, so optimize your fitnessfunc to be super fast (can use caching for example).
+%
+% Reference: algorithm from: The Microbial Genetic Algorithm, Inman Harvey, 1996
+% There exists a single-line version, see "Evolvable Neuronal Paths: A Novel Basis for Information and Search in the Brain", 2011, Fernando C, Vasas V, Szathmáry E, Husbands P. PLoS ONE 6(8): e23534. doi: 10.1371/journal.pone.0023534
+%
+% For a more general implementation (not tailored specifically for the reorientation task), take a look at aux/autogen.m and aux/autogen_mini.m
+
+    % Default values
+    if ~exist('multistart', 'var') || isempty(multistart)
+        multistart = 1;
+    end
+    if ~exist('debug', 'var')
+        debug = false;
+    end
+    if ~exist('randomstart', 'var') || isempty(randomstart)
+        randomstart = false;
+    end
+    if ~exist('mutatefunc', 'var') || isempty(mutatefunc)
+        mutatefunc = false;
+    end
+    if ~exist('randomgen', 'var') || isempty(randomgen)
+        randomgen = false;
+    end
+    if ~exist('truerandom', 'var') || isempty(randomgen)
+        truerandom = false;
+    end
+    if ~exist('onlyrigid', 'var') || isempty(onlyrigid)
+        onlyrigid = true;
+    end
+
+    % Sanity checks
+    if ~isvector(genestart)
+        % ensure genestart is a vector
+        genestart = spm_imatrix(genestart);
+    else
+        % else if it's already a vector, convert to a matrix and back to a vector to ensure that all parameters are provided (so that we can simply provide [0] and the rest will be filled)
+        genestart = spm_imatrix(spm_matrix(genestart));
+    end
+
+    % Init multistart gene pool
+    bestpool = repmat(genestart, [multistart, 1]);
+    bestpoolfit = zeros(multistart, 1);
+    if onlyrigid
+        genescount = 6;  % restrict to rotation and translation (first 6 items in spm_matrix())
+    else
+        genescount = numel(genestart);  % explore all genes (rotation, translation, scale and shearing)
+    end
+
+    % Save current seed for the random number generator, because SPM functions can reset it (although it is bad practice, their goal is to transform non-deterministic functions to deterministic like that... But this may explain why the same analysis can give different results when ran on different computers/OSes, as this changes the underlying random number generators)
+    % We will do 3 things at once here:
+    % 1- save the original rng so we can restore it at the end
+    orig_rng = rng();
+    % 2- set the rng so this function is deterministic
+    % Note: setting the generator type is discouraged but we want that so that results are reproducible in the future, we don't need secure pseudorandomness. For more infos, see: https://www.mathworks.com/help/matlab/math/updating-your-random-number-generator-syntax.html
+    if isstruct(truerandom)
+        %rng(truerandom);
+        rand('seed', truerandom);
+    elseif ~truerandom
+        %rng(0,'philox');  % philox works better than twister. It's important to have a good rng, else the exploration of new solutions by random mutations and random start population will be less effective
+        % DEPRECATED: rng() is advised by mathworks but it's magnitude of times slower. It's not made to be in a loop, but we need to reset the rng inside the loop since any call to the fitnessfunc may reset the rng (eg, if fitnessfunc calls spm functions). So we are back to using rand('seed'), which is the fastest option: https://stackoverflow.com/questions/39251206/speed-up-random-number-generation-in-matlab
+        % See also these threads about this performance issue of rng():
+        % https://www.mathworks.com/matlabcentral/answers/128411-rng-is-slow-to-control-random-number-generation-can-i-go-back-to-seed-or-state
+        % https://www.mathworks.com/matlabcentral/answers/5320-speed-improvement-of-the-random-generator
+        % https://www.mathworks.com/matlabcentral/answers/67667-performance-degradation-of-random-number-generation-in-matlab-r2013a
+        rand('seed', 0);
+    % else: we don't reset the rng, we leave as default and hence we get true pseudorandomness (non-deterministic output since we continue with the previous rng state)
+    end
+    % 3- save the current rng state, so that we can restore it after each spm call
+    cur_rng = rand('seed');  %cur_rng = rng();
+
+    % For each multistart round (where we restart anew from scratch - this is different from tournaments where each tournament round reuses the same population, here we change the whole population)
+    for m=1:multistart
+        fprintf('Multistart: %i/%i\n', m, multistart);
+        % Init population's genes pool vars
+        if ~randomstart
+            % Initialize the gene pool by simply replicating the provided genestart vector
+            genepool = repmat(genestart, [popsize 1]);
+            genepoolfit = ones(popsize,1) .* fitnessfunc(genestart);  % cache the fitness scores, this is a trick to speed up calculations if fitnessfunc is computation expensive
+            bestfit = NaN;  % it's useless to compute a bestfit from input because anyway we replicated the input so we are guaranteed to only find a better solution
+            best = NaN;
+        else
+            % Else initialize the gene pool by generating a random translation and orientation for each individual, but retain the original scale and shear from the genestart vector
+            if randomgen ~= false
+                % User-defined function
+                genepool = randomgen(popsize, numel(genestart));
+            else
+                % Default function
+                if onlyrigid
+                    genepool = [round(rand(popsize, 3).*maxdim) - maxdim, rand(popsize,3).*(2*pi) - pi, repmat(genestart(7:end), [popsize 1])];  % random rotation and translation
+                    %genepool = [repmat(genestart(1:3), [popsize 1]), rand(popsize,3).*(2*pi) - pi, repmat(genestart(7:end), [popsize 1])];  % random rotation only
+                else
+                    genepool = [round(rand(popsize, 3).*maxdim) - maxdim, rand(popsize,3).*(2*pi) - pi, 0.5 + rand(popsize, 6)*1.5];  % random rotation, translation, scale and shearing
+                end
+            end  % endif
+            genepoolfit = NaN(popsize,1);  % cache the fitness scores, this is a trick to speed up calculations if fitnessfunc is computation expensive
+            % but keep the first candidate as the initial one, so we ensure that any candidate we choose is not worse than the input
+            genepool(1, :) = genestart;
+            best = 1;
+            bestfit = fitnessfunc(genestart);
+            %bestfit = NaN;
+            %best = NaN;
+        end  % endif
+        % Launch the tournament
+        for t=1:tournamentcount
+            if mod(t, 10) == 0, fprintf('Tournament: %i/%i\n', t, tournamentcount); end;
+            % Restore previous state of rng (to avoid SPM meddling with rng - each call to fitnessfunc calls spm and hence meddles with the rng)
+            rand('seed', cur_rng);  % rng(cur_rng); -- much slower...
+            % Randomly select one individual A
+            A = randi(popsize);  % alternative: A = ceil(rand()*popsize);
+            % Randomly select another individual B in the deme just after A
+            B = mod((A+1+randi(demesize)), popsize)+1;  % alternative: B = mod((A+1+ceil(rand()*demesize)), popsize)+1;
+            % Save current rng state (to restore at next tournament)
+            cur_rng = rand('seed');  %cur_rng = rng();
+            if debug, disp([A B]); end;
+            % Compute fitness cost for each candidate
+            if ~isnan(genepoolfit(A))
+                % If there is a cache for this candidate, use it
+                Afit = genepoolfit(A);
+            else
+                % Else compute the fitness cost
+                Afit = fitnessfunc(genepool(A,:));  % memoize fitness to optimize, so that we can reuse directly at the end
+            end
+            if ~isnan(genepoolfit(B))
+                Bfit = genepoolfit(B);
+            else
+                Bfit = fitnessfunc(genepool(B,:));
+            end
+            % Find the winner
+            if debug, disp(genepool(A,:)); disp(genepool(B,:)); disp(Afit); disp(Bfit); end;
+            if (Afit > Bfit)
+                winner = A;
+                loser = B;
+                winnerfit = Afit;
+            else
+                winner = B;
+                loser = A;
+                winnerfit = Bfit;
+            end  % endif
+            % Update fitness cost cache ...
+            genepoolfit(loser) = NaN;  % ... by deleting (NaN) the loser's fitness cost, so next time it will be recomputed...
+            genepoolfit(winner) = winnerfit;  % ... and by caching the winner's fitness cost.
+            % Compare winner with the best fit (memoization)
+            if winnerfit >= bestfit || isnan(bestfit)  % note: it's crucial to use >= (and not >) because it can happen that both candidates are equal (they maxxed out), in this case there will still be a loser who will be mutated, which can hence become suboptimal. In that case, if the loser was the best candidate, we need to pass the best label to the winner (despite them being equal), because the winner will not change.
+                bestfit = winnerfit;
+                best = winner;
+            end  % endif
+            % Recombine and mutate for each gene
+            rand('seed', cur_rng);  %rng(cur_rng);  % Restore previous state of rng (to avoid SPM meddling with rng)
+            for i=1:genescount  % should be i=1:genescount but we limit to the rotation parameters in spm_matrix() (ie, no rescaling nor shearing, we only do rotation and translation = rigid-body transform)
+                r = rand();
+                if r < (recombinationrate+mutationrate)  % optimization, see slide 20 of: https://fr.slideshare.net/lrq3000/pathway-evolution-algorithm-in-netlogo
+                    if r < recombinationrate
+                        % Recombine/crossover (ie, take the allele from the winner)
+                        genepool(loser, i) = genepool(winner, i);
+                    else
+                        % Mutate
+                        if mutatefunc ~= false
+                            % User-defined mutation function
+                            genepool(loser, i) = mutatefunc(i);
+                        else
+                            % Default mutation function
+                            if 1 <= i && i <= 3
+                                % Translation, constrained to image dimension
+                                genepool(loser, i) = round(rand()*(maxdim(i).*2) - maxdim(i));
+                            elseif 4 <= i && i <= 6
+                                % Rotation, constrained to radians
+                                genepool(loser, i) = rand()*2*pi - pi;
+                            elseif i >= 7
+                                % Scaling and shearing, bounded inside 0.5 to 2.0 here (but in reality it's not bounded, but then the exploration space is way to big)
+                                genepool(loser, i) = 0.5 + rand()*1.5;
+                            end  % endif
+                        end
+                    end  % endif
+                end  % endif
+            end  % endfor genes walking
+            cur_rng = rand('seed');  %cur_rng = rng(); % Save current rng state (to restore at next tournament)
+        end  % endfor tournament rounds
+
+        % Select the best candidate
+        % DEPRECATED: manual comparison by iterating and comparing all candidates. This does not use memoization. If fitnessfunc is expensive, this will take a long time to compute
+        %best = 1;
+        %bestfit = fitnessfunc(genepool(best, :));
+        %for i=2:popsize
+        %    newfit = fitnessfunc(genepool(i, :));
+        %    if newfit > bestfit
+        %        best = i;
+        %        bestfit = newfit;
+        %    end  % endif
+        %end  % endif
+
+        % Save best candidate of this multistart run
+        bestpool(m,:) = genepool(best, :);
+        bestpoolfit(m) = bestfit;
+    end  %endfor multistart rounds
+
+    % End of multistart: select the best candidate over all runs
+    [~, bestidx] = max(bestpoolfit);
+    best = bestpool(bestidx, :);
+    bestfit = bestpoolfit(bestidx);
+    bestfitstd = std(bestpoolfit);
+
+    % Restore original rng
+    rng(orig_rng);
+end  % endfunction
+
+function fitness = jointhistogramfitness_core(template_vol_uint8, input_vol_uint8, M, mi_algo, voxelsize, fwhm_hist)
+% fitness = jointhistogramfitness_core(template_vol_uint8, input_vol_uint8, M, mi_algo, voxelsize, fwhm)
+% Compute a fitness cost from the mutual information of the joint histogram of two images
+% by calling spm_coreg.optfun() (private method which is exposed if varargin > 4)
+%
+% template_vol_uint8 and input_vol_uint8 must be smoothed volumens and converted to uint8 format (ie, with a .uint8 field) beforehand, using spmaux.smoothvol2uint8().
+% M is an orientation matrix or a vector as returned by spm_imatrix() to apply on input_vol and ON TOP of input_vol.mat to match template_vol.mat. Indeed, spm_coreg.optfun and spm_hist2 will apply it on top of input_vol.mat, such that orientation_that_will_be_tested = pinv(spm_matrix(genestart))*input_vol.mat -- in spm_coreg you can see the full call to spm_hist2 being: VF.mat\spm_matrix(x(:)')*VG.mat -- so by default you want M to be [0 0 0 0 0 0] (as is done in spm_coreg, which means we start from input_vol.mat as-is without any modification), NOT spm_imatrix(input_vol.mat) which would be a transform that would be applied ON TOP of input_vol.mat
+% mi_algo is the mutual information like measure that will be applied to the joint histogram to calculate a score. Can be: 'mi', 'nmi', 'ecc' (default), 'ncc'.
+% voxelsize is the sampling density for the joint histogram calculation, see spm_hist2.m. With [1 1 1] (default), this means that approximately each voxel will be sampled. With [4 4 4], 1 every 64 voxels will be sampled, which is less accurate but multiple of magnitude faster to compute.
+% fwhm_hist is the smoothing kernel that will be applied on the histogram. By default [7 7].
+%
+% DEPRECATED: auxsmoothvol2uint8 is spmaux.smoothvol2uint8(), which can be memoized using a previously instanciated memoize(@aux.smoothvol2uint8) and reuse the same memoized function for each call to this function, this significantly speed up the processing here
+
+    if ~exist('M', 'var')
+        M = [0 0 0 0 0 0];
+    end
+    if ~isvector(M)
+        iM = spm_imatrix(M);
+    else
+        iM = M;
+    end
+    if ~exist('mi_algo', 'var') || isempty(mi_algo)
+        mi_algo = 'ncc';  % ncc works WAY better than other measures for this purpose
+    end
+    if ~exist('voxelsize', 'var') || isempty(voxelsize)
+        % Sampling density for the joint histogram calculation, see spm_hist2.m. With [1 1 1], this means that approximately each voxel will be sampled. With [4 4 4], 1 every 64 voxels will be sampled.
+        voxelsize = [1 1 1];
+        % spm_coreg.optfun() expects a voxelsize, which will be kind of the sampling rate at which we will sample both images coregistration. To make it faster, it's useless to use a finer resolution than the images, so the best is to autodetect the input image's resolution and use that as the basis (we could also use the lowest resolution of the 2 images).
+        %iM = spm_imatrix(input_vol.mat);
+        %voxelsize = abs(iM(7:9));
+        
+        %iM2 = spm_imatrix(template_vol.mat);
+        %voxelsize2 = abs(iM2(7:9));
+        %if sum(abs(voxelsize - voxelsize2)) > 1E-6
+        %    error('Input images do not have the same dimensions, please first rescale them to the same dimension before attempting a joint histogram!\n');
+        %end
+    end
+    if ~exist('fwhm_hist', 'var') || isempty(fwhm_hist)
+        fwhm_hist = [1 1]; % Default in spm_coreg is [7 7], but it's less effective in practice in our tests
+    end
+
+    % Memoize the smoothing & converter to uint8 function so that it will significantly speed up the calculations
+    %smoothtouint8 = memoize(@spmaux.smoothvol2uint8);
+
+    % spm_coreg.optfun expects images uint8 formatted (and int8 smoothed)
+    %fitness = spm_coreg(iM, auxsmoothvol2uint8(template_vol, fwhm(1)), auxsmoothvol2uint8(input_vol, fwhm(2)), voxelsize, mi_algo, fwhm);
+    fitness = spm_coreg(iM, template_vol_uint8, input_vol_uint8, voxelsize, mi_algo, fwhm_hist);  % this is the most time consuming part, and it's already a precompiled function so I don't know what we can do better
+    % This will call spm_hist2, which we can call manually like so: spm_hist2(input_vol_uint8.uint8, template_vol_uint8.uint8, input_vol.mat, [1 1 1])
+    % TODO: manually compute joint histogram and mutual information in pure matlab using accumarray? https://stackoverflow.com/questions/23691398/mutual-information-and-joint-entropy-of-two-images-matlab/23691992#23691992 - could then use fmincg or fminunc (native in matlab) or spm_powell (as is done in spm_coreg)
+
+    % spm_coreg.optfun always negates the resulting fitness (to minimize), so we need to flip the sign around to maximize
+    fitness = -1.0 * fitness;
+end  % endfunction
+
+function fitnessfunc = jointhistogramfitness(spmaux, template_vol, input_vol, fwhm)
+% fitnessfunc = jointhistogramfitness(aux, template_vol, input_vol, mi_algo, voxelsize, fwhm, fwhm_hist)
+% Preprocess template_vol and input_vol to uint8 (and smooth them), and return a function handle to compute the mutual information score over the joint histogram
+% The main purpose of this function is to do the uint8 & smoothing preprocessing of the volumes only once, as this is computation expensive and thus slows down the genetic algorithm a lot if we don't memoize or precompute. Memoization did not work as intended, so we precompute here.
+%
+% fwhm is a vector of 2 elements being the value of the isotropic smoothing kernel for each image: fwhm(1) for template_vol and fwhm(2) for input_vol. Default is [20 20].
+% See help jointhistogramfitness_core for the other parameters.
+
+    % Default values
+    if ~exist('fwhm', 'var')
+        fwhm = [20 20];
+    end
+
+    % spm_coreg.optfun expects images uint8 formatted (and int8 smoothed), so we precompute here once and for all since we only expect the orientation matrix to change (and not the volumes)
+    input_vol_uint8 = spmaux.smoothvol2uint8(input_vol, fwhm(2));
+    template_vol_uint8 = spmaux.smoothvol2uint8(template_vol, fwhm(1));
+
+    % return the jointhistogramfitness_core function properly instanciated with the preprocessed uint8 volumes
+    fitnessfunc = @(x, mi_algo, voxelsize, fwhm_hist)jointhistogramfitness_core(template_vol_uint8, input_vol_uint8, x, mi_algo, voxelsize, fwhm_hist);
+end
+
+function [svol_down, svol_down_data] = niirescale(svol, scalefactor, savetofile)
+% [svol_down, svol_down_data] = niirescale(svol, scalefactor, savetofile)
+% Downscale or upscale any nifti volume in-memory
+% svol is a nifti volume structure as provided by spm_vol()
+% scalefactor is a float number with < 1.0 for downscaling and > 1.0 for upscaling. It can also be a vector of 3 scaling factors for x, y and z (eg, size(template_data) or template_vol.dim)
+% The rescaled volume can be saved in a file by setting savetofile = 'filename.nii' or manually by: svol_down.fname = 'newfilename.nii'; spm_write_vol(svol_down, svol_down_data);
+% The rescaled volume will have its origin repositionned correctly. Also, the orientation matrix will report the correct rescaling factors, hence the voxel-to-world mapping will be correct in nifti viewers.
+% TODO: need to implement interpolation for upscaling. For the moment, this function works great for downscaling (most common use case), but not for upscaling. See interp2.m or better waifu2x.
+
+    % Default values
+    if ~exist('savetofile', 'var')
+        savetofile = false;
+    end  % endif
+
+    % Read the voxels content of the input volume
+    svol_data = spm_read_vols(svol);
+    % Resize image's data with interpolation
+    svol_down_data = imresize3(svol_data, scalefactor, 'method', 'lanczos3', 'Antialiasing', true);  % works only with MATLAB >= v2016 - alternative for older versions: use imresizen.m from: https://www.mathworks.com/matlabcentral/answers/358043-resizing-a-3d-image-without-using-imresize3
+    %Y2 = real(ifftn(fftn(Y), input_vol.dim ./ 2.0));  % alternative but huge ringing artifacts, see https://www.mathworks.com/matlabcentral/answers/358043-resizing-a-3d-image-without-using-imresize3 and https://www.researchgate.net/post/How_can_I_avoid_Ringing_artifacts_in_Fourier_transformation_in_SCILAB and https://en.wikipedia.org/wiki/Ringing_artifacts to enhance by filtering
+    % Make a copy of the input volume
+    svol_down = svol;
+    % Scale its dimensions
+    svol_down.dim = round(svol.dim .* scalefactor);
+    % Translate origin first, by dividing distances
+    % after this, the image is already looking good, exactly like the original. But the voxel dimension reported in the orientation matrix is incorrect.
+    svol_down.mat = svol.mat;
+    svol_down.mat(1:3, 4) = svol_down.mat(1:3, 4) .* scalefactor;
+    % Calculate the inverse of the scale factor, because what we want to do is to do the opposite of the real operation we did on the data: if we downscale the data, the voxel dimensions in the orientation matrix must be upscaled to compensate, eg, if we downscale to 0.5, the voxel size will be 2x as big as before. This will also change the rotation and translation values of course so that we compensate for the upscaling in order to maintain the same origin and orientation.
+    invscale = (1/scalefactor);
+    % Scale its orientation matrix (including the origin/translation again! Hence the translation/origin part of the matrix needs to be scaled in square - eg, if scalefactor == 0.5, then the translation factors need to be .* 0.5^2 == 0.25)
+    % This corrects the voxel dimension, so that nifti viewers know that the voxels are rescaled and hence can do a correct voxel-to-world remapping
+    svol_down.mat = diag([ones(1,3) .* invscale, 1]) * svol_down.mat;  % set 1 for the last value in the rescaling vector so that we maintain the intercept/constant factor to 1 - Deprecated: not working correctly for setting the origin/translation!
+    % Save to a new nifti file if option is enabled
+    if savetofile ~= false
+        svol_down.fname = savetofile;
+        spm_write_vol(svol_down, svol_down_data);
+    end
+end  % endfunction
+
+function mga_allinone
+    %autoreorient('t1.nii', 'affine', [], false, false, 'svd', false, false, true);
+
+    %downscaled image
+    [input_vol_down, input_vol_down_data] = niirescale(input_vol, 0.5);
+    iM_down = spm_imatrix(input_vol_down.mat);
+    template_vol_down = niirescale(template_vol, 0.5);
+    fitnessfunc_core = jointhistogramfitness(spmaux, template_vol, input_vol, [1 10]);
+    fitnessfunc = @(x)fitnessfunc_core(x, 'ncc', [3 3 3], [1 1]);
+    [best, bestfit] = mga_imatrix([0 0 0 0 0 0], 10, 3, fitnessfunc, 0.7, 0.25, 1000, 2, true, input_vol_down.dim, [], [], false)
+    newM = (spm_matrix(best)/input_vol_down.mat)*input_vol.mat;
+    if (sum(abs(newM - input_vol.mat), 'all') < 1E-6) || (abs(bestfit - fitnessfunc(input_vol_down.mat)) < 1E-6)
+        fprintf('Could not find a better orientation!');
+    else
+        spm_get_space(inputpath, pinv(spm_matrix(best))*input_vol.mat);  % simple rule of 3: project the ratio between the best fit orientation matrix over the downscaled image's orientation matrix, and then apply this on the original fullscale volume, which leads to the correct projection of the best orientation found on the downscaled volume but here in the fullscale space.
+        input_vol_down.fname = 't1_down.nii';
+        input_vol_down.mat = pinv(spm_matrix(best))*input_vol_down.mat;
+        spm_write_vol(input_vol_down, input_vol_down_data);
+    end
+
+    % Bonus
+    [input_vol_down, input_vol_down_data] = niirescale(input_vol, 0.25);
+    iM_down = spm_imatrix(input_vol_down.mat);
+    input_vol_down.fname = 't1_down.nii';
+    spm_write_vol(input_vol_down, input_vol_down_data);
+
+    %------------
+    % full image - works best, no need to rescale
+    fitnessfunc_core = jointhistogramfitness(spmaux, template_vol, input_vol, [1 20]);
+    fitnessfunc = @(x)fitnessfunc_core(x, 'ncc', [8 8 8], [1 1]);  % working best with ncc
+    % TODO: redo another try with [1 1 1] resampling step?
+    rng(0,'philox');
+    custrng = rng;
+    [best, bestfit] = mga_imatrix([0 0 0 0 0 0], 10, 3, fitnessfunc, 0.7, 0.25, 500, 5, true, input_vol.dim, [], [], custrng, false)
+    [best, bestfit] = mga_imatrix(best, 10, 3, fitnessfunc, 0.7, 0.25, 500, 5, true, input_vol.dim, [], [], custrng, false)
+    fitnessfunc_precise = @(x)fitnessfunc_core(x, 'ncc', [4 4 4], [1 1]);  % working best with ncc
+    [best, bestfit] = mga_imatrix(best, 10, 3, fitnessfunc_precise, 0.7, 0.25, 300, 2, true, input_vol.dim, [], [], custrng, false)
+    fitnessfunc_precise = @(x)fitnessfunc_core(x, 'ncc', [2 2 2], [1 1]);  % working best with ncc
+    [best, bestfit] = mga_imatrix(best, 10, 3, fitnessfunc_precise, 0.7, 0.25, 200, 1, true, input_vol.dim, [], [], custrng, false)
+    %fitnessfunc_precise = @(x)fitnessfunc_core(x, 'ncc', [4 4 4], [1 1]);  % working best with ncc
+    %[best2, bestfit2] = mga_imatrix(best, 10, 3, fitnessfunc_precise, 0.7, 0.25, 500, 2, true, input_vol.dim, [], [], false)
+    %fitnessfunc_precise = @(x)fitnessfunc_core(x, 'ncc', [2 2 2], [1 1]);  % working best with ncc
+    %[best3, bestfit3] = mga_imatrix(best2, 10, 3, fitnessfunc_precise, 0.7, 0.25, 200, 2, true, input_vol.dim, [], [], false)
+    newM = spm_matrix(best);
+    if (sum(abs(newM - input_vol.mat), 'all') < 1E-6) || (abs(bestfit - fitnessfunc(input_vol.mat)) < 1E-6)
+        fprintf('Could not find a better orientation!');
+    else
+        spm_get_space(inputpath, pinv(newM) * input_vol.mat);  % spm_coreg returns an orientation vector that needs to be applied ON TOP of the initial input_vol.mat orientation matrix
+    end
+
+    % to redo from previous best
+    %[best, bestfit] = mga_imatrix(best, 10, 3, fitnessfunc, 0.7, 0.25, 1000, 1, false, input_vol.dim, [], [], false)
+
+    % just test fitness with current input_vol
+    fitnessfunc_core = jointhistogramfitness(spmaux, template_vol, input_vol, [1 20]);
+    fitnessfunc = @(x)fitnessfunc_core(x, 'ncc', [8 8 8], [1 1]);
+    fitnessfunc([0 0 0 0 0 0])
+    input_orig = spm_vol('t1_orig.nii');
+    fitnessfunc(spm_imatrix(input_vol.mat/input_orig.mat))  % can then do pinv(input_vol.mat/input_orig.mat) * input_vol.mat
+    fitnessfunc(best)
+
+    % ------------------
+
+    % full image v2 - works best, no need to rescale
+    fitnessfunc_core = jointhistogramfitness(spmaux, template_vol, input_vol, [1 20]);  % use [1 20] to smooth the input_vol to a kernel of 20 as is the default in auto_reorient by John Ashburner and Carlton Chu, but in our experience [1 1] (no smoothing) works better
+    fitnessfunc = @(x)fitnessfunc_core(x, 'ncc', [8 8 8], [1 1]);  % working best with ncc
+    % TODO: redo another try with [1 1 1] resampling step?
+    [best, bestfit, ~, bestpool, bestpoolfit] = mga_imatrix([0 0 0 0 0 0], 10, 3, fitnessfunc, 0.7, 0.25, 500, 20, true, input_vol.dim, [], [], false, true, false)
+    %[best, bestfit] = mga_imatrix(best, 10, 3, fitnessfunc, 0.7, 0.25, 500, 5, true, input_vol.dim, [], [], false, false)
+    %[best, bestfit] = mga_imatrix(best, 10, 3, fitnessfunc, 0.7, 0.25, 300, 2, true, input_vol.dim, [], [], false, false)
+    % select best amongst all candidates
+    fitnessfunc_precise = @(x)fitnessfunc_core(x, 'ncc', [1 1 1], [1 1]);
+    bestpoolfit2 = bestpoolfit;
+    for i=1:size(bestpool, 1)
+        bestpoolfit2(i) = fitnessfunc_precise(bestpool(i,:));
+    end
+    [~, bestidx] = max(bestpoolfit2);
+    best = bestpool(bestidx, :);
+    newM = spm_matrix(best);
+    if (sum(abs(newM - input_vol.mat), 'all') < 1E-6) || (abs(bestfit - fitnessfunc(input_vol.mat)) < 1E-6)
+        fprintf('Could not find a better orientation!');
+    %else
+        %spm_get_space(inputpath, pinv(newM) * input_vol.mat);  % spm_coreg returns an orientation vector that needs to be applied ON TOP of the initial input_vol.mat orientation matrix
+    end
+
+    % to redo from previous best
+    %[best, bestfit] = mga_imatrix(best, 10, 3, fitnessfunc, 0.7, 0.25, 1000, 1, false, input_vol.dim, [], [], false)
+
+    % just test fitness with current input_vol
+    %fitnessfunc_core = jointhistogramfitness(spmaux, template_vol, input_vol, [1 20]);
+    fitnessfunc = @(x)fitnessfunc_core(x, 'ncc', [1 1 1], [1 1]);
+    fitnessfunc([0 0 0 0 0 0])
+    input_orig = spm_vol('t1_orig.nii');
+    fitnessfunc(spm_imatrix(input_vol.mat/input_orig.mat))  % can then do pinv(input_vol.mat/input_orig.mat) * input_vol.mat
+    fitnessfunc(best)
+
+
+
+    % ------------
+
+    input_orig = spm_vol('t1_orig.nii');
+    origbest = spm_imatrix(input_vol.mat/input_orig.mat);
+    H = spmaux.jointhist(template_vol, input_vol, [0]);
+    H2 = spmaux.jointhist(template_vol, input_vol, origbest);
+    H3 = spmaux.jointhist(template_vol, input_vol, best);
+
+
+
+    % ----------
+
+    % Compute the joint histogram between two 3D matrices of voxels
+    % https://stackoverflow.com/questions/23691398/mutual-information-and-joint-entropy-of-two-images-matlab/23691992#23691992
+    template_data = spm_read_vols(template_vol);
+    input_data = spm_read_vols(input_vol);
+    % Rescale input data to match the template size (it's better to do that before rounding to uint8 for precision)
+    input_data_down = imresize3(input_data, size(template_data), 'method', 'lanczos3', 'Antialiasing', true);
+    % Intensity normalization via feature scaling by normalizing into a int8 range (0-255), so both images can be matched (else they can have very different values), so we end up with a 256*256 joint histogram - see https://en.wikipedia.org/wiki/Feature_scaling#Rescaling_(min-max_normalization)
+    input_data_norm = aux.featurescale_antialias(input_data_down, 0, 255);
+    template_data_norm = aux.featurescale_antialias(template_data, 0, 255);
+    % Compute the joint histogram
+    jhist = accumarray([input_data_norm(:)+1, template_data_norm(:)+1], 1);  % shift values by 1 to account for the fact that MATLAB starts indexing at 1. Note also that both arrays need to be exactly the same size.
+    jprob = jhist / numel(input_data_norm);
+    % Display the joint histogram as a greyscale chart of the log
+    aux.plot_jointhist(jhist);
+    % Compute the measure
+    weightedcoveragemeasure = @(jhist)log(nnz(jhist)) + log(sum(sum(jhist)));
+    weightedcoveragemeasure(jhist);
+    % TODO apply orientation matrix before calculating the joint hist
+
+    aux.display_mri3d(aux.apply_transform3d(input_data, origbest, true));
+
+    % TODO: tester les reorientation matrix et plot pour voir si correct, et ensuite plug dans code ci-dessus avant jointhist calculation
+    %-------
+
+    spmaux.jointhist_display(template_vol, input_vol, [0], [], struct('cost_fun', 'ncc'))
+
+    spmaux.jointhist_score(H, 'ncc')
+    spmaux.jointhist_score(H2, 'ncc')
+    spmaux.jointhist_score(H3, 'ncc')
+
+    spmaux.jointhist_display(template_vol, input_vol, x, [], struct('cost_fun', 'ncc'))
+    spmaux.jointhist_display(template_vol, input_vol, best, [], struct('cost_fun', 'ncc'))
+
+    log(nnz(H3)) + log(sum(H3, 'all'))
+
+    makehgtform
+
+    sign(data) .* log( abs( data ) ); % https://www.mathworks.com/matlabcentral/answers/253936-logarithmic-range-colorbar-imagesc
+    % BEST: cptcmap.m for custom color maps with custom ranges: https://www.mathworks.com/matlabcentral/answers/253936-logarithmic-range-colorbar-imagesc
+end
+
 
 %%% Additional resources
 % spm_get_space usage found in this BSD-2 licensed script? Can't remember https://github.com/jimmyshen007/NeMo/blob/c7cc775e7fc84f84255b0d3fa474b7f955e817f5/mymfiles/eve_tools/Structural_Connectivity/approx_coreg2MNI.m
