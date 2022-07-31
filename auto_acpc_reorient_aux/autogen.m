@@ -1,4 +1,4 @@
-function [best, bestfit, bestfitstd] = autogen(genestart, popsize, demesize, fitnessfunc, recombinationrate, mutationrate, tournamentcount, multistart, randomstart, randomgen, mutatefunc)
+function [best, bestfit, bestfitstd, bestpool, bestpoolfit] = autogen(genestart, popsize, demesize, fitnessfunc, recombinationrate, mutationrate, tournamentcount, multistart, randomstart, randomgen, mutatefunc, truerandom)
 % [best, bestfit, bestfitstd] = autogen(genestart, popsize, demesize, fitnessfunc, recombinationrate, mutationrate, tournamentcount, multistart, randomstart, randomgen, mutatefunc)
 % genestart is a vector of a single candidate that can be fed to fitnessfunc(genestart). This will both be used as the reference candidate (so we ensure we don't return a worse solution), and to generate new candidates.
 % popsize is the size of the population. This number should be relative to the number of tournamentcount, a good number is 1/10th of tournamentcount, as to allow all candidates to be explored and recombined by the end of the algorithm.
@@ -11,8 +11,10 @@ function [best, bestfit, bestfitstd] = autogen(genestart, popsize, demesize, fit
 % randomstart defines how the initial population is generated: false will generate a whole population as a copy of the input candidate genestart, true will keep genestart as the reference candidate but all other individuals will be randomly generated according to the randomgen function. If randomstart = true, randomgen needs to be a function accepting popsize as 1st argument and length of genestart as 2nd argument, and which generates popsize individuals to add in the pool. For example, if fitnessfunc = @(x)sum(x), randomgen can be @(popsize,numel_genestart)randi(10, popsize, numel_genestart)
 % randomgen is a function that defines how the initial population is randomly generated when randomstart == true. randomgen should expect 2 parameters: popsize and numel(genestart).
 % mutatefunc defines how the mutation is done (ie, how random values are calculated to be assigned to loser's genes). It should expect one parameter which is the locus location i, so that a different mutation scheme can be applied depending on where in the vector we are mutating.
+% truerandom defines whether the function is deterministic (false) or non-deterministic (true or a rand('seed') integer)
 %
 % Output: best candidate, bestfit fitness score of the best candidate, bestfitstd the standard deviation over all multistart rounds (allows to assess performance variance by evaluating the variability of the current set of parameters)
+% also outputs bestpool and bestpoolfit, which are all the best candidates across the multistart rounds. This can be used externally to manually select the best candidate using another fitnessfunction (possibly more precise but more time consuming, but since the set is reduced this is faster).
 %
 % Example usage: [best, bestfit, bestfitstd] = autogen([1 2 3 4 5 6 7 8], 100, 10, @(x)sum(x), 0.7, 0.25, 1000, 1000, true, @(popsize,numel_genestart)randi(10, popsize, numel_genestart))
 % another example with a smaller number of tournament rounds and hence smaller population, with similar performances: [best, bestfit, bestfitstd] = autogen([1 2 3 4 5 6 7 8], 10, 3, @(x)sum(x), 0.7, 0.25, 100, 1000, true, @(popsize,numel_genestart)randi(10, popsize, numel_genestart))
@@ -39,11 +41,38 @@ function [best, bestfit, bestfitstd] = autogen(genestart, popsize, demesize, fit
     if ~exist('mutatefunc', 'var') || isempty(mutatefunc)
         mutatefunc = @(i)randi(10);
     end
+    if ~exist('truerandom', 'var') || isempty(randomgen)
+        truerandom = false;
+    end
 
     % Init multistart gene pool
     bestpool = repmat(genestart, [multistart, 1]);
     bestpoolfit = zeros(multistart, 1);
     genescount = numel(genestart);
+    % Memoize fitness function, this will also work between multistart rounds, can save a lot of time
+    %fitnessfunc_memo = memoize(fitnessfunc);  % deprecated, this slows down a lot the calculations. Use only if your fitness function is computation intensive AND the genes are discrete, else with a continuous valued vector it's useless to memoize
+
+    % Save current seed for the random number generator, because SPM functions can reset it (although it is bad practice, their goal is to transform non-deterministic functions to deterministic like that... But this may explain why the same analysis can give different results when ran on different computers/OSes, as this changes the underlying random number generators)
+    % We will do 3 things at once here:
+    % 1- save the original rng so we can restore it at the end
+    orig_rng = rng();
+    % 2- set the rng so this function is deterministic
+    % Note: setting the generator type is discouraged but we want that so that results are reproducible in the future, we don't need secure pseudorandomness. For more infos, see: https://www.mathworks.com/help/matlab/math/updating-your-random-number-generator-syntax.html
+    if isstruct(truerandom)
+        %rng(truerandom);
+        rand('seed', truerandom);
+    elseif ~truerandom
+        %rng(0,'philox');  % philox works better than twister. It's important to have a good rng, else the exploration of new solutions by random mutations and random start population will be less effective
+        % DEPRECATED: rng() is advised by mathworks but it's magnitude of times slower. It's not made to be in a loop, but we need to reset the rng inside the loop since any call to the fitnessfunc may reset the rng (eg, if fitnessfunc calls spm functions). So we are back to using rand('seed'), which is the fastest option: https://stackoverflow.com/questions/39251206/speed-up-random-number-generation-in-matlab
+        % See also these threads about this performance issue of rng():
+        % https://www.mathworks.com/matlabcentral/answers/128411-rng-is-slow-to-control-random-number-generation-can-i-go-back-to-seed-or-state
+        % https://www.mathworks.com/matlabcentral/answers/5320-speed-improvement-of-the-random-generator
+        % https://www.mathworks.com/matlabcentral/answers/67667-performance-degradation-of-random-number-generation-in-matlab-r2013a
+        rand('seed', 0);
+    % else: we don't reset the rng, we leave as default and hence we get true pseudorandomness (non-deterministic output since we continue with the previous rng state)
+    end
+    % 3- save the current rng state, so that we can restore it after each spm call
+    cur_rng = rand('seed');  %cur_rng = rng();
 
     % For each multistart round (where we restart anew from scratch - this is different from tournaments where each tournament round reuses the same population, here we change the whole population)
     for m=1:multistart
@@ -65,10 +94,14 @@ function [best, bestfit, bestfitstd] = autogen(genestart, popsize, demesize, fit
         end  % endif
         % Launch the tournament
         for t=1:tournamentcount
+            % Restore previous state of rng (to avoid SPM meddling with rng - each call to fitnessfunc calls spm and hence meddles with the rng)
+            rand('seed', cur_rng);  % rng(cur_rng); -- much slower...
             % Randomly select one individual A
             A = randi(popsize);  % alternative: A = ceil(rand()*popsize);
             % Randomly select another individual B in the deme just after A
             B = mod((A+1+randi(demesize)), popsize)+1;  % alternative: B = mod((A+1+ceil(rand()*demesize)), popsize)+1;
+            % Save current rng state (to restore at next tournament)
+            cur_rng = rand('seed');  %cur_rng = rng();
             % Compute fitness cost for each candidate
             if ~isnan(genepoolfit(A))
                 % If there is a cache for this candidate, use it
@@ -102,6 +135,7 @@ function [best, bestfit, bestfitstd] = autogen(genestart, popsize, demesize, fit
                 %disp([best, bestfit, genepool(best, :)]);  % debugline
             end  % endif
             % Recombine and mutate for each gene
+            rand('seed', cur_rng);  %rng(cur_rng);  % Restore previous state of rng (to avoid SPM meddling with rng)
             for i=1:genescount
                 r = rand();
                 if r < (recombinationrate+mutationrate)  % optimization, see slide 20 of: https://fr.slideshare.net/lrq3000/pathway-evolution-algorithm-in-netlogo
@@ -113,8 +147,9 @@ function [best, bestfit, bestfitstd] = autogen(genestart, popsize, demesize, fit
                         genepool(loser, i) = mutatefunc(i);
                     end  % endif
                 end  % endif
-            end  % endfor
-        end  % endfor
+            end  % endfor genes walking
+            cur_rng = rand('seed');  %cur_rng = rng(); % Save current rng state (to restore at next tournament)
+        end  % endfor tournament rounds
 
         % Select the best candidate
         % DEPRECATED: manual comparison by iterating and comparing all candidates. This does not use memoization. If fitnessfunc is expensive, this will take a long time to compute
@@ -137,11 +172,14 @@ function [best, bestfit, bestfitstd] = autogen(genestart, popsize, demesize, fit
         % Save best candidate of this multistart run
         bestpool(m,:) = genepool(best, :);
         bestpoolfit(m) = bestfit;
-    end  %endfor
+    end  %endfor multistart rounds
 
     % End of multistart: select the best candidate over all runs
     [~, bestidx] = max(bestpoolfit);
     best = bestpool(bestidx, :);
     bestfit = bestpoolfit(bestidx);
     bestfitstd = std(bestpoolfit);
+
+    % Restore original rng
+    rng(orig_rng);
 end  % endfunction
