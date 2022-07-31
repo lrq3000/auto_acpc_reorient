@@ -8,7 +8,14 @@ function funs = auto_acpc_reorient_aux
 % Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, includin without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 % The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 % THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+    funs = importFunctions; % For Octave compatibility: we need the first function to have the same name as the filename.
+end
 
+% For MatLab compatibility, we use a function to return other functions handlers as properties, this is a workaround since it cannot load multiple functions in one .m file (contrarywise to Octave using source())
+% This way, we can just do the following to call any function here from any other script:
+% to load the aux lib: addpath(genpath(strcat(cd(fileparts(mfilename('fullpath'))),'/../gbnn-core/'))); aux = gbnn_aux;
+% to use a function: aux.func_name(args);
+function funs = importFunctions
     funs.display_mri3d = @display_mri3d;
     funs.plot_jointhist = @plot_jointhist;
     funs.matrix2coords = @matrix2coords;
@@ -16,6 +23,14 @@ function funs = auto_acpc_reorient_aux
     % Intensity normalization via feature scaling by normalizing into a int8 range (0-255), so both images can be matched (else they can have very different values), so we end up with a 256*256 joint histogram - see https://en.wikipedia.org/wiki/Feature_scaling#Rescaling_(min-max_normalization)
     funs.featurescale_antialias = @(svol_data, rangemin, rangemax)uint8(round(((svol_data + (rand(size(svol_data)) .* min(svol_data(nnz(svol_data)), [], 'all')) - min(svol_data, [], 'all')) .* (rangemax - rangemin)) ./ (max(svol_data, [], 'all') - min(svol_data, [], 'all'))));  % we add a random value to avoid aliasing artifacts, which is scaled according to the minimal non-zero value found in the input data (so we don't mess up significantly with the data)
     funs.featurescale = @(svol_data, rangemin, rangemax)uint8(round(((svol_data - min(svol_data, [], 'all')) .* (rangemax - rangemin)) ./ (max(svol_data, [], 'all') - min(svol_data, [], 'all'))));
+    funs.getnargs=@getnargs; % to process named optional arguments
+    funs.varspull = @varspull; % to load arguments into local namespace/workspace
+    funs.editarg=@editarg;
+    funs.delarg=@delarg;
+    funs.addarg=@addarg;
+    funs.printcputime=@printcputime;
+    funs.printtime=@printtime;
+    funs.printeta=@printeta;
 end  % endfunction
 
 function fh = display_mri3d(svol_data, M, figtitle)
@@ -174,4 +189,169 @@ function temporary_reorient()
     SliceBrowser(warpedim) % same as writing the volume EXCEPT that the orientation convention is different, so don't compare with MRIcron
     aux.display_mri3d(warpedim)
     % https://www.mathworks.com/matlabcentral/fileexchange/20604-3d-slice-viewer
+end
+
+function argStruct = getnargs(varargin, defaults, restrict_flag)
+%GETNARGS Converts name/value pairs to a struct (this allows to process named optional arguments).
+%
+% ARGSTRUCT = GETNARGS(VARARGIN, DEFAULTS, restrict_flag) converts
+% name/value pairs to a struct, with defaults.  The function expects an
+% even number of arguments in VARARGIN, alternating NAME then VALUE.
+% (Each NAME should be a valid variable name and is case sensitive.)
+% Also VARARGIN should be a cell, and defaults should be a struct().
+% Optionally: you can set restrict_flag to true if you want that only arguments names specified in defaults be allowed. Also, if restrict_flag = 2, arguments that aren't in the defaults will just be ignored.
+% After calling this function, you can access your arguments using: argstruct.your_argument_name
+%
+% Examples:
+%
+% No defaults
+% getnargs( {'foo', 123, 'bar', 'qwerty'} )
+%
+% With defaults
+% getnargs( {'foo', 123, 'bar', 'qwerty'} , ...
+%               struct('foo', 987, 'bar', magic(3)) )
+%
+% See also: inputParser
+%
+% Authors: Jonas, Richie Cotton and LRQ3000
+%
+
+    % Extract the arguments if it's inside a sub-struct (happens on Octave), because anyway it's impossible that the number of argument be 1 (you need at least a couple, thus two)
+    if (numel(varargin) == 1)
+        varargin = varargin{:};
+    end
+
+    % Sanity check: we need a multiple of couples, if we get an odd number of arguments then that's wrong (probably missing a value somewhere)
+    nArgs = length(varargin);
+    if rem(nArgs, 2) ~= 0
+        error('NameValuePairToStruct:NotNameValuePairs', ...
+            'Inputs were not name/value pairs');
+    end
+
+    % Sanity check: if defaults is not supplied, it's by default an empty struct
+    if ~exist('defaults', 'var')
+        defaults = struct;
+    end
+    if ~exist('restrict_flag', 'var')
+        restrict_flag = false;
+    end
+
+    % Syntactic sugar: if defaults is also a cell instead of a struct, we convert it on-the-fly
+    if iscell(defaults)
+        defaults = struct(defaults{:});
+    end
+
+    optionNames = fieldnames(defaults); % extract all default arguments names (useful for restrict_flag)
+
+    argStruct = defaults; % copy over the defaults: by default, all arguments will have the default value.After we will simply overwrite the defaults with the user specified values.
+    for i = 1:2:nArgs % iterate over couples of argument/value
+        varname = varargin{i};
+        % check that the supplied name is a valid variable identifier (it does not check if the variable is allowed/declared in defaults, just that it's a possible variable name!)
+        if ~isvarname(varname)
+          error('NameValuePairToStruct:InvalidName', ...
+             'A variable name was not valid: %s position %i', varname, i);
+        % if options are restricted, check that the argument's name exists in the supplied defaults, else we throw an error. With this we can allow only a restricted range of arguments by specifying in the defaults.
+        elseif restrict_flag && ~isempty(defaults) && ~any(strmatch(varname, optionNames))
+            if restrict_flag ~= 2 % restrict_flag = 2 means that we just ignore this argument, else we show an error
+                error('%s is not a recognized argument name', varname);
+            end
+        % else alright, we replace the default value for this argument with the user supplied one (or we create the variable if it wasn't in the defaults and there's no restrict_flag)
+        else
+            argStruct = setfield(argStruct, varname, varargin{i + 1});  %#ok<SFLD>
+        end
+    end
+
+end
+
+function varspull(s)
+% Import variables in a structures into the local namespace/workspace
+% eg: s = struct('foo', 1, 'bar', 'qwerty'); varspull(s); disp(foo); disp(bar);
+% Will print: 1 and qwerty
+%
+%
+% Author: Jason S
+%
+    for n = fieldnames(s)'
+        name = n{1};
+        value = s.(name);
+        assignin('caller',name,value);
+    end
+end
+
+function varargin = delarg(varname, varargin)
+% varargin = delarg(varname, varargin)
+% Removes an argument from varargin with name varname (varname must be either a string or a cell array of strings)
+
+    % Extract the arguments if it's inside a sub-struct (happens on Octave), because anyway it's impossible that the number of argument be 1 (you need at least a couple, thus two)
+    if (numel(varargin) == 1)
+        varargin = varargin{:};
+    end
+
+    nArgs = length(varargin);
+    for i = nArgs-1:-2:1 % iterate over couples of argument/value
+        vname = varargin{i};
+        if iscell(varname) && any(ismember(varname, vname))
+            varargin(i:i+1) = [];
+        elseif strcmp(vname, varname)
+            varargin(i:i+1) = [];
+            break;
+        end
+    end
+end
+
+function varargin = editarg(varname, varvalue, varargin)
+% varargin = editarg(varname, varargin)
+% Replaces an argument from varargin with name varname (varname must either be a string or a cell array of strings, same for varvalue) with the content varvalue
+
+    % Extract the arguments if it's inside a sub-struct (happens on Octave), because anyway it's impossible that the number of argument be 1 (you need at least a couple, thus two)
+    if (numel(varargin) == 1)
+        varargin = varargin{:};
+    end
+
+    nArgs = length(varargin);
+    for i = 1:2:nArgs % iterate over couples of argument/value
+        vname = varargin{i};
+        if iscell(varname) && any(ismember(varname, vname))
+            idx = find(ismember(varname, vname));
+            varargin{i+1} = varvalue{idx};
+        elseif strcmp(vname, varname)
+            varargin{i+1} = varvalue;
+            break;
+        end
+    end
+end
+
+function varargin = addarg(varname, varvalue, varargin)
+    varargin = {varargin ; varname ; varvalue};
+end
+
+function printcputime(perf, sometext)
+    if ~exist('sometext', 'var') || isempty(sometext)
+        fprintf('Elapsed cpu time is %g seconds.\n', perf);
+    else
+        fprintf(sometext, perf);
+    end
+end
+
+function printtime(perf, sometext)
+    if ~exist('sometext', 'var') || isempty(sometext)
+        fprintf('Elapsed time is %g seconds.\n', perf);
+    else
+        fprintf(sometext, perf);
+    end
+end
+
+function printeta(current_it, total_it, starttime, silent)
+% Print a progress meter with an estimation of the remaining time required to perform all iterations of the experiment
+% ETA is calculated simply by using a linear interpolation (ie, rule of 3).
+% The only arguments needed are: the current number of iterations done, the total number of iterations to do to end the experiment, and the timestamp before the experiment started (using cputime()).
+    elapsed = cputime() - starttime;
+    if current_it == total_it
+        eta = 0;
+    else
+        eta = elapsed / current_it * (total_it-current_it);
+    end
+    if silent; fprintf('\r'); end;
+    fprintf('%i/%i [elapsed: %s, eta: %s, %.2f it/s]', current_it, total_it, sec2hms(elapsed), sec2hms(eta), (current_it / elapsed)); flushout();
+    if ~silent; fprintf('\n'); aux.flushout(); end;
 end

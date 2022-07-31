@@ -1,16 +1,32 @@
-function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, affdecomposition, precoreg, precoreg_reset_orientation, debug)
+function returncode = autoreorient(varargin)
+% autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, affdecomposition, precoreg, precoreg_reset_orientation, just_check, debug)
+% 
+% autoreorient of structural and BOLD and other MRI modalities for SPM12 and MATLAB (tested on v2018b)
+%
+% This function supports named arguments, use it like this:
+% autoreorient('inputpath', 'path/to/file.nii', 'mode', 'affine', 'debug', true)
+% 
 % DEVELOPMENT FUNCTION
 % This function is kept as a barebone version of the core routines to do autoreorientation using SPM12 functions. This is kept for development purposes (to quickly debug out only the core routines), do not use it for production.
-% affdecomposition defines the decomposition done to ensure structure is maintained (ie, no reflection nor shearing). Can be: qr (default), svd (deprecated), imatrix or none. Only the qr decomposition ensures the structure is maintained.
-% precoreg_reset_orientation: before coregistration, reset orientation? Value can be: true (null orientation but keep scale/voxel-size), a vector of 3 values (null orientation and reset scale/voxel-size with the provided vector - this is the only way to reset the voxel-size, as the nifti format does NOT store the scanner's original orientation nor voxel-size/dimension, so the user must provide a vector of voxel-size from eg the MRI machine printout of sequences parameters) or 'mat0' (previous orientation matrix if available) or false (to disable)
+%
+% ## Input variables:
+% * inputpath: path to the input nifti file to reorient to template.
+% * mode: defines how the registration to template will be done: 'affine' or 'ecc'.
+% * flags_affine: custom flags to pass to the SPM12's spm_affreg() function.
+% * noshearing: if true, if shearing is detected after reorientation to template, try to nullify the shearing. Default: true.
+% * affdecomposition defines the decomposition done to ensure structure is maintained (ie, no reflection nor shearing). Can be: qr (default), svd (deprecated), imatrix or none. Only the qr decomposition ensures the structure is maintained.
+% * precoreg_reset_orientation: before coregistration, reset orientation? Value can be: true (null orientation but keep scale/voxel-size), a vector of 3 values (null orientation and reset scale/voxel-size with the provided vector - this is the only way to reset the voxel-size, as the nifti format does NOT store the scanner's original orientation nor voxel-size/dimension, so the user must provide a vector of voxel-size from eg the MRI machine printout of sequences parameters) or 'mat0' (previous orientation matrix if available) or false (to disable)
+% * just_check: if true, the software will only check if the input image has an issue with its structure (ie, reflection or shearing), and will return 0 if no issue, or >0 if there is an issue (1: shearing, 2: anisotropic scaling, 4: reflection(s), greater values than 4 represent the sum of multiple issues found, eg, 5 = shearing + reflections).
 %
 % License: MIT License, except otherwise noted in comments around the code the other license pertains to.
-% Copyright (C) 2020 Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
+% Copyright (C) 2020-2022 Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
+% v0.6.17
 %
 % Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, includin without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 % The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 % THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+    % == Load auxiliary functions
     % Addpath of the auxiliary library
     if ~exist('auto_acpc_reorient_aux.m','file')
         %restoredefaultpath;
@@ -22,46 +38,65 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
     spmaux = auto_acpc_reorient_spmaux;  % Auxiliary functions to interface with SPM
     aux = auto_acpc_reorient_aux;  % Our own auxiliary functions
 
-    % Default values
-    if ~exist('noshearing', 'var')
-        noshearing = true;
-    end
-    if ~exist('isorescale', 'var')
-        isorescale = true;
-    end
-    if ~exist('affdecomposition', 'var')
-        affdecomposition = 'qr';
-    end
-    if ~exist('precoreg', 'var')
-        precoreg = true;
-    end
-    if ~exist('debug', 'var')
-        debug = false;
-    end
-    if ~exist('precoreg_reset_orientation', 'var')
-        precoreg_reset_orientation = false;
+    % == Arguments processing
+    % List of possible arguments and their default values
+    arguments_defaults = struct( ...
+        ... % Mandatory
+        'inputpath', 0, ...
+        'mode', 0, ...
+        ... % Optional
+        'flags_affine', [], ...
+        'noshearing', true, ...
+        'isorescale', true, ...
+        'affdecomposition', 'qr', ...
+        'precoreg', true, ...
+        'precoreg_reset_orientation', false, ...
+        'just_check', false, ...
+        ...
+        ... % Debug stuffs
+        'debug', false);
+
+    % Process the arguments
+    arguments = aux.getnargs(varargin, arguments_defaults, true);
+
+    % Load variables into local namespace (called workspace in MatLab)
+    aux.varspull(arguments);
+    
+    % Sanity Checks on input variables
+    if inputpath == 0 or mode == 0
+        error('Missing arguments: inputpath and mode are mandatory!');
     end
 
+    % == Load brain templates
     % Load input and template images
     input_vol = spm_vol(strtrim(inputpath));
     template_vol = spm_vol(strtrim('T1_template_CAT12_rm_withskull.nii'));
 
-    % Sanity checks on input image
+    % == Sanity checks on input image
     iM = spm_imatrix(input_vol.mat);
+    structure_errors_counter = 0;
     %iM_orig = spm_imatrix(input_vol.private.mat0);  % NOT reliable: svol.private.mat0 is simply the previously saved orientation matrix, not necessarily the original one
     if (sum(abs(iM(10:12))) > 1E-5)
         fprintf('Warning: Shearing detected in input image, this can be fixed by setting precoreg_reset_orientation = "scanner".\n');
+        structure_errors_counter = structure_errors_counter + 1;
     end
     if (sum(abs(iM(7:9))) > 1E-5)  % alternative: calculate the QR decomposition
         fprintf('Warning: Anisotropic scaling detected in input image, this can be fixed by setting precoreg_reset_orientation = "scanner".\n');
+        structure_errors_counter = structure_errors_counter + 2;
     end
     [Q, R] = qr(input_vol.mat(1:3,1:3));
     Z = sign(diag(R)) .* abs(diag(R));
     if ((single(det(Q)) == -1.0) || (any(sign(Z) == -1, 'all') && isodd(sum(sign(Z) == -1))))
         fprintf('Warning: Reflections detected in input image (i.e., the orientation is not preserved from the original orientation, so the left side of the brain _may_ be inversed with the right side!), this can be fixed by setting precoreg_reset_orientation = "scanner".\n');  % note that some scanner (such as Siemens) may set a reflection in the initial orientation matrix they set, without impacting the left-right orientation (ie, the reflection is in another dimension)
+        structure_errors_counter = structure_errors_counter + 4;
+    end
+    if just_check == true
+        % just checking structural errors, we return a unique error code to specify all errors found
+        returncode = structure_errors_counter;
+        return;
     end
 
-    % Reset orientation?
+    % == Reset orientation?
     if precoreg_reset_orientation ~= false
         % Important note: there is NO way to recover the original dimensions and orientation, as the initial orientation matrix or quaternions are not saved but replaced by newer values. So if this was tampered, the user need to manually specify the original dimension (eg, by using values such as the voxel size in the printout of the sequence parameters from the MRI machine).
         % For more infos, see:
@@ -101,14 +136,14 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
         fprintf('Reset orientation done!\n');
     end
 
-    % Smooth input image, helps a lot with the coregistration (which is inherently noisy since there is no perfect match)
+    % == Smooth input image, helps a lot with the coregistration (which is inherently noisy since there is no perfect match)
     smoothed_vol = spm_vol(inputpath);
     smoothed_vol2 = spm_smoothto8bit(smoothed_vol, 20);
     % Y = spm_read_vols(smoothed_vol2);  % direct access to the data matrix
     % imagesc(Y(:,:,20))  % show a slice
     keyboard
 
-    % Manual/Pre coregistration (without using SPM)
+    % == Manual/Pre coregistration (without using SPM)
     if precoreg
         fprintf('Pre-coregistration by translation of centroid (resetting origin), please wait...\n');
         % Find the center of mass
@@ -138,7 +173,7 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
         fprintf('Pre-coregistration done!\n');
     end
 
-    % Affine coregistration (with translation)
+    % == Affine coregistration (with translation)
     if strcmp(mode, 'affine')
         fprintf('Affine reorientation\n');
         if exist('flags_affine', 'var') && ~isempty(flags_affine)
@@ -380,7 +415,9 @@ function autoreorient(inputpath, mode, flags_affine, noshearing, isorescale, aff
         % TODO: to enhance performance, first do a spm_coreg using a binarized input image (ie, a brain mask), using the mean as is done for the centroids calculation? Just to ensure to have a good starting point for orientation.
     end %endif
     fprintf('Autoreorientation done!\n');
-end %endfunction
+    returncode = 0;
+    return;
+end %endfunction, end of main routine
 
 function [T, R, Z, S] = get_imat(M)
 % [T, R, Z, S] = get_imat(M)
