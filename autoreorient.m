@@ -4,14 +4,14 @@ function returncode = autoreorient(varargin)
 % autoreorient of structural and BOLD and other MRI modalities for SPM12 and MATLAB (tested on v2018b)
 %
 % This function supports named arguments, use it like this:
-% autoreorient('inputpath', 'path/to/file.nii', 'mode', 'affine', 'debug', true)
+% autoreorient('inputpath', 'path/to/file.nii', 'mode', 'jointhistogram', 'debug', true)
 % 
 % DEVELOPMENT FUNCTION
 % This function is kept as a barebone version of the core routines to do autoreorientation using SPM12 functions. This is kept for development purposes (to quickly debug out only the core routines), do not use it for production.
 %
 % ## Input variables:
 % * inputpath: path to the input nifti file to reorient to template.
-% * mode: defines how the registration to template will be done: 'affine' or 'ecc'.
+% * mode: defines how the registration to template will be done: 'affine' or 'jointhistogram'. Note that jointhistogram uses spm_coreg(), it is the recommended mode as it produces better results generally and produces true rigid-body transforms without reflections nor anisotropic scaling nor shearing, and is equivalent to the 'ecc' or 'mi' mode in the antecedant package spm_auto_reorient_coregister. 'affine' uses spm_affreg() and is not recommended as it can produce reflections (inverted hemispheres) and anisotropic scaling, even with the 'rigid-body' regtype flag.
 % * flags_affine: custom flags to pass to the SPM12's spm_affreg() function.
 % * noshearing: if true, if shearing is detected after reorientation to template, try to nullify the shearing. Default: true.
 % * affdecomposition defines the decomposition done to ensure structure is maintained (ie, no reflection nor shearing). Can be: qr (default), svd (deprecated), imatrix or none. Only the qr decomposition ensures the structure is maintained.
@@ -20,7 +20,7 @@ function returncode = autoreorient(varargin)
 %
 % License: MIT License, except otherwise noted in comments around the code the other license pertains to.
 % Copyright (C) 2020-2022 Stephen Karl Larroque, Coma Science Group & GIGA-Consciousness, University Hospital of Liege, Belgium
-% v0.6.17
+% v0.6.18
 %
 % Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, includin without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 % The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
@@ -77,11 +77,11 @@ function returncode = autoreorient(varargin)
     structure_errors_counter = 0;
     %iM_orig = spm_imatrix(input_vol.private.mat0);  % NOT reliable: svol.private.mat0 is simply the previously saved orientation matrix, not necessarily the original one
     if (sum(abs(iM(10:12))) > 1E-5)
-        fprintf('Warning: Shearing detected in input image, this can be fixed by setting precoreg_reset_orientation = "scanner".\n');
+        fprintf('Warning: Shearing detected in input image, this can sometimes be fixed by setting precoreg_reset_orientation = "scanner" or noshearing = true.\n');
         structure_errors_counter = structure_errors_counter + 1;
     end
     if (sum(abs(iM(7:9))) > 1E-5)  % alternative: calculate the QR decomposition
-        fprintf('Warning: Anisotropic scaling detected in input image, this can be fixed by setting precoreg_reset_orientation = "scanner".\n');
+        fprintf('Warning: Anisotropic scaling detected in input image, this can sometimes be fixed by setting precoreg_reset_orientation = "scanner".\n');
         structure_errors_counter = structure_errors_counter + 2;
     end
     [Q, R] = qr(input_vol.mat(1:3,1:3));
@@ -98,7 +98,7 @@ function returncode = autoreorient(varargin)
 
     % == Reset orientation?
     if precoreg_reset_orientation ~= false
-        % Important note: there is NO way to recover the original dimensions and orientation, as the initial orientation matrix or quaternions are not saved but replaced by newer values. So if this was tampered, the user need to manually specify the original dimension (eg, by using values such as the voxel size in the printout of the sequence parameters from the MRI machine).
+        % Important note: there is NO way to recover the original dimensions and orientation, as the initial orientation matrix or quaternions are not saved but replaced by newer values. So if this was tampered, the user needs to manually specify the original dimensions (eg, by using values such as the voxel size in the printout of the sequence parameters from the MRI machine).
         % For more infos, see:
         % Tuto on nifti orientations systems: http://www.grahamwideman.com/gw/brain/orientation/orientterms.htm
         % http://www.grahamwideman.com/gw/brain/tools/gworc/index.htm
